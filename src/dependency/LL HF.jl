@@ -8,8 +8,8 @@ export LLHFNumPara, LLHFSysPara
 export LLHF_init_with_alpha, LLHF_init_with_lambda
 export LLHF_change_alpha!, LLHF_change_lambda!
 export LLHF_EnergyPerArea, LLHF_solve
-public wavefunction, polar_azimuthal_angles, berry_curvature, realspace_pauli
-
+public polar_azimuthal_angles, berry_curvature, realspace_pauli
+public VP_solution
 
 
 
@@ -44,7 +44,7 @@ begin
         int = sum(wf) / Nr^2 * 2π*l^2
         return sqrt(int)
     end
-    @kwdef mutable struct SystemParameters
+    @kwdef mutable struct LLHFSysPara
         # material constants
         e::Float64 = ElementaryCharge
         m_e::Float64 = ElectronMass * 0.4
@@ -72,12 +72,11 @@ begin
         WF_nmlz::Float64 = WF_normalizer(a1, a2, l, γ2)
     end
     "twist angle θ in degree, gate screening"
-    define_system(θ::Float64 = 2.1, D::Float64 = 20nm) = SystemParameters(
+    define_system(θ::Float64 = 2.1, D::Float64 = 20nm) = LLHFSysPara(
         twist_θ = θ,
         D = D,
     )
-    function wavefunction(r1, r2, k1, k2, n::Int64=0; 
-        sys_para::SystemParameters)
+    function wavefunction(r1, r2, k1, k2, n::Int64=0; sys_para::LLHFSysPara)
 
         return wavefunction0(r1, r2, k1, k2, n; 
             a1=sys_para.a1, a2=sys_para.a2, l=sys_para.l, 
@@ -109,7 +108,7 @@ begin
         return V
     end
     # Hartree[p1, p2, k1, k2, τp, τk]
-    function Hartree!(Hartree,N1, N2, LL, sys_para::SystemParameters; Nshell=2)
+    function Hartree!(Hartree,N1, N2, LL, sys_para::LLHFSysPara; Nshell=2)
         Hartree .= 0.0
 
         # N shells of reciprocal lattice vectors G
@@ -135,7 +134,7 @@ begin
         return Hartree
     end
     # Fock[p1, p2, k1, k2, τn′, τn]
-    function Fock!(Fock, N1, N2, LL, sys_para::SystemParameters; Nshell=2)
+    function Fock!(Fock, N1, N2, LL, sys_para::LLHFSysPara; Nshell=2)
         Fock .= 0.0
 
         Threads.@threads for p1 in 0:N1-1    
@@ -177,9 +176,9 @@ begin
         end
         return Fock
     end
-    @kwdef mutable struct NumericalParameters
+    @kwdef mutable struct LLHFNumPara
 
-        system::SystemParameters
+        system::LLHFSysPara
         
         LL::Int64 = 0    # Landau level index
         N1::Int64 = 1
@@ -212,13 +211,13 @@ begin
 
     end
     "initializa the numerical calculation using α"
-    function LLHF_init_with_alpha(alpha::Float64, sys_para::SystemParameters = define_system(); others...)
-        num_para = NumericalParameters(system = sys_para, others...)
+    function LLHF_init_with_alpha(alpha::Float64, sys_para::LLHFSysPara = define_system(); others...)
+        num_para = LLHFNumPara(; system = sys_para, others...)
         return LLHF_change_alpha!(num_para, alpha)
     end
     "initializa the numerical calculation using λ"
-    function LLHF_init_with_lambda(lambda::Float64, sys_para::SystemParameters = define_system(); others...)
-        num_para = NumericalParameters(system = sys_para, others...)
+    function LLHF_init_with_lambda(lambda::Float64, sys_para::LLHFSysPara = define_system(); others...)
+        num_para = LLHFNumPara(; system = sys_para, others...)
         return LLHF_change_lambda!(num_para, lambda)
     end
     "change α"
@@ -246,7 +245,7 @@ begin
         return num_para
     end
     "τ = 1 or 2"
-    function VP_solution(num_para::NumericalParameters, τ)
+    function VP_solution(num_para::LLHFNumPara, τ)
         DM = zeros(ComplexF64, size(num_para.DMseed))
         DM[:,:,τ,τ] .= 1.0
         return DM
@@ -255,7 +254,7 @@ end
 
 
 
-function hf_interaction(ρ, para::NumericalParameters)
+function hf_interaction(ρ, para::LLHFNumPara)
     H = zeros(ComplexF64, size(para.H0))
     for τk in 1:2, τp in 1:2
         @tensor H[:,:, τk, τk][k1, k2] += 
@@ -273,7 +272,7 @@ function trace(rho, O)
     return @reduce sum(k1,k2,τ,τ′) rho[k1,k2,τ,τ′] * O[k1,k2,τ′,τ]
 end
 "Energy Per Area"
-function LLHF_EnergyPerArea(ρ; para::NumericalParameters,
+function LLHF_EnergyPerArea(ρ; para::LLHFNumPara,
     Hint::Array{ComplexF64,4} = hf_interaction(ρ, para), 
     imag_print = false, warn = true, )
 
@@ -295,15 +294,15 @@ end
 
 
 
-
+# in construction
 module crystal_symmetry
 
     using MKL, LinearAlgebra
     using MoireIVC.Basics: ql_cross
-    import ..NumericalParameters
+    import ..LLHFNumPara
     export Translation, C3, C2
 
-    function Translation(rho, g1::Int64, g2::Int64; para::NumericalParameters)
+    function Translation(rho, g1::Int64, g2::Int64; para::LLHFNumPara)
 
         N1 = para.N1; N2 = Para.N2
 
@@ -343,7 +342,7 @@ module crystal_symmetry
         end
     end
 
-    function C3(rho, n::Int64 = 0, sym = nothing; para::NumericalParameters)
+    function C3(rho, n::Int64 = 0, sym = nothing; para::LLHFNumPara)
 
         N1 = para.N1; N2 = Para.N2
 
@@ -403,7 +402,7 @@ module crystal_symmetry
 
     end
 
-    function C2(rho, n::Int64 = 0, sym=:T; para::NumericalParameters)
+    function C2(rho, n::Int64 = 0, sym=:T; para::LLHFNumPara)
 
         N1 = para.N1; N2 = Para.N2
 
@@ -447,9 +446,11 @@ module crystal_symmetry
 end
 using .crystal_symmetry
 
+
+
 # only T=0
 # only use non-zero filling when LL1==LL2
-function hf_onestep!(new_rho, ρ; para::NumericalParameters,
+function hf_onestep!(new_rho, ρ; para::LLHFNumPara,
     Hint = hf_interaction(ρ, para), 
     post_procession=[],
     ) 
@@ -468,7 +469,7 @@ function hf_onestep!(new_rho, ρ; para::NumericalParameters,
 
     return
 end
-function band(ρ; Hint = H_int(ρ), para::NumericalParameters)
+function band(ρ; Hint = H_int(ρ), para::LLHFNumPara)
     H = Hint + para.H0
     N1 = para.N1; N2 = para.N2
     band = zeros(Float64, N1, N2, 2)
@@ -479,7 +480,7 @@ function band(ρ; Hint = H_int(ρ), para::NumericalParameters)
     return band
 end
 function hf_converge!(ρ;
-    para::NumericalParameters, EPA = LLHF_EnergyPerArea,
+    para::LLHFNumPara, EPA = LLHF_EnergyPerArea,
     error_tolerance = 1E-10, max_iter_times = 200,
     complusive_mixing = false, complusive_mixing_rate = 0.5,
     stepwise_output::Bool = false, final_output::Bool = true,
@@ -587,7 +588,7 @@ end
 
 
 # θ/π and ϕ/π
-function polar_azimuthal_angles(rho, para::NumericalParameters)
+function polar_azimuthal_angles(rho, para::LLHFNumPara)
     N1 = para.N1
     N2 = para.N2
     theta = Matrix{Float64}(undef, N1,N2);
@@ -605,16 +606,8 @@ function polar_azimuthal_angles(rho, para::NumericalParameters)
     end
     return theta, phi
 end
-
-
-
-
-
-
-
-
 # Berry Curvature
-function berry_curvature(rho, para::NumericalParameters)
+function berry_curvature(rho, para::LLHFNumPara)
 
     N1 = para.N1
     N2 = para.N2
@@ -660,13 +653,7 @@ function berry_curvature(rho, para::NumericalParameters)
 
     return Ω
 end
-
-
-
-
-
-
-function realspace_pauli(rx, ry, ρ, para::NumericalParameters)
+function realspace_pauli(rx, ry, ρ, para::LLHFNumPara)
     r1 = [rx; ry] ⋅ para.system.G1 / 2π
     r2 = [rx; ry] ⋅ para.system.G2 / 2π
     N1 = para.N1; N2 = para.N2
@@ -690,10 +677,6 @@ function realspace_pauli(rx, ry, ρ, para::NumericalParameters)
     return (sx, sy, sz, n)
 end
 
-
-
-LLHFNumPara = NumericalParameters
-LLHFSysPara = SystemParameters
 
 
     
