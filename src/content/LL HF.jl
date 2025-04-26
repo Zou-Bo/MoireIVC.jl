@@ -2,14 +2,14 @@
 Hartree-Fock on two effective Landau levels with opposite magnetic fields
 Two LLs are from two valleys with quasibloch repres in hexagonal BZ
 """
-module LL_HF
+module LLHF
 
 export LLHFNumPara, LLHFSysPara
 export LLHF_init_with_alpha, LLHF_init_with_lambda
 export LLHF_change_alpha!, LLHF_change_lambda!
 export LLHF_EnergyPerArea, LLHF_solve
 public polar_azimuthal_angles, berry_curvature, realspace_pauli
-public VP_solution
+public VP_solution, add_phi!
 
 
 
@@ -295,25 +295,36 @@ end
 
 
 # in construction
-module crystal_symmetry
+module CrystalSym
 
     using MKL, LinearAlgebra
     using MoireIVC.Basics: ql_cross
-    import ..LLHFNumPara
-    export Translation, C3, C2
+    export Trans, Rot3, PT
 
-    function Translation(rho, g1::Int64, g2::Int64; para::LLHFNumPara)
 
-        N1 = para.N1; N2 = Para.N2
 
-        g1 %= 4
-        g2 %= 4
+
+    "enforce translation symmetry with G/2"
+    struct Trans 
+        g1::Int64
+        g2::Int64
+    end
+    function (Ts::Trans)(rho)
+
+        N1 = size(rho, 1)
+        N2 = size(rho, 2)
+        g1 = mod(Ts.g1, 4)
+        g2 = mod(Ts.g2, 4)
         if isodd(g1*N1) || isodd(g2*N2)
             @warn "translation symmetry cannot be forced due to odd (N1=$N1, N2=$N2)" 
             return
         end
-
+        if iseven(g1) && iseven(g2)
+            @warn "the given translation symmetry ($g1, $g2) is empty"
+            return
+        end
         boost1, boost2 = (g1*N1÷2, g2*N2÷2)
+
         identification = falses(N1,N2) # true if this element is used
         for k1 in 0:N1-1, k2 in 0:N2-1
             if identification[1+k1, 1+k2] 
@@ -325,33 +336,35 @@ module crystal_symmetry
             # Tk = k + G/2 (mod G)
             Tk1 = k1 + boost1
             Tk2 = k2 + boost2
-
-            TG1 = floor(Int64, Tk1//N1)
-            TG2 = floor(Int64, Tk2//N2)
-
-            Tk1 -= TG1 * N1
-            Tk2 -= TG2 * N2
-
+            TG1, Tk1 = fldmod(Tk1, N1)
+            TG2, Tk2 = fldmod(Tk2, N2)
             identification[1+Tk1, 1+Tk2] = true
 
-            phase = ql_cross(boost1/N1, boost2/N2, k1/N1, k2/N2) + π
-            phase -= ql_cross(TG1, TG2, Tk1/N1, Tk2/N2) 
+            phase = ql_cross(boost1/N1, boost2/N2, k1/N1, k2/N2) - ql_cross(TG1, TG2, Tk1/N1, Tk2/N2) + π
+
+            rho[1+k1,1+k2,1,2] = (rho[1+k1,1+k2,1,2] + rho[1+Tk1,1+Tk2,1,2]*cis( phase)) / 2.
+            rho[1+k1,1+k2,2,1] = (rho[1+k1,1+k2,2,1] + rho[1+Tk1,1+Tk2,2,1]*cis(-phase)) / 2.
+            rho[1+k1,1+k2,1,1] = (rho[1+k1,1+k2,1,1] + rho[1+Tk1,1+Tk2,1,1] ) / 2.
+            rho[1+k1,1+k2,2,2] = (rho[1+k1,1+k2,2,2] + rho[1+Tk1,1+Tk2,2,2] ) / 2.
+
             rho[1+Tk1,1+Tk2,1,2] = rho[1+k1,1+k2,1,2] * cis(-phase)
             rho[1+Tk1,1+Tk2,2,1] = rho[1+k1,1+k2,2,1] * cis(phase)
-
+            rho[1+Tk1,1+Tk2,1,1] = rho[1+k1,1+k2,1,1]
+            rho[1+Tk1,1+Tk2,2,2] = rho[1+k1,1+k2,2,2]
         end
     end
 
-    function C3(rho, n::Int64 = 0, sym = nothing; para::LLHFNumPara)
 
-        N1 = para.N1; N2 = Para.N2
+    "enforce C3 rotational symmetry with order n around k=0"
+    struct Rot3 
+        n::Int64
+    end
+    function (C3::Rot3)(rho)
 
-        if !isnothing(sym)
-            C2(rho, 0, sym)
-        end
-
-        n %= 3
-        if !( N1==N2 )
+        N1 = size(rho, 1)
+        N2 = size(rho, 2)
+        n = mod(C3.n, 3)
+        if N1 !=N2
             @warn "Rotation symmetry cannot be forced due to different N1=$N1 and N2=$N2" 
             return
         end
@@ -364,47 +377,47 @@ module crystal_symmetry
                 identification[1+k1, 1+k2] = true
             end
 
-            # Rk = R(2π/3) * k 
-            # R2k = R(2π/3) * Rk
+            # Rk = Rot(2π/3) * k 
+            # R2k = Rot(2π/3) * Rk
             Rk1, Rk2 = [-1 -1; 1 0] * [k1; k2]
             R2k1, R2k2 = [-1 -1; 1 0] * [Rk1; Rk2]
-
-            RG1 = floor(Int64, Rk1//N1)
-            RG2 = floor(Int64, Rk2//N2)
-            R2G1 = floor(Int64, R2k1//N1)
-            R2G2 = floor(Int64, R2k2//N2)
-
-            Rk1 -= RG1 *N1
-            Rk2 -= RG2 *N2
-            R2k1 -= R2G1 *N1
-            R2k2 -= R2G2 *N2
-
+            RG1, Rk1 = fldmod(Rk1, N1)
+            RG2, Rk2 = fldmod(Rk2, N2)
+            R2G1, R2k1 = fldmod(R2k1, N1)
+            R2G2, R2k2 = fldmod(R2k2, N2)
             identification[1+Rk1, 1+Rk2] = true
             identification[1+R2k1, 1+R2k2] = true
 
             phaseR = -ql_cross(RG1, RG2, Rk1/N1, Rk2/N2) + n*2π/3
             phaseR2 = -ql_cross(R2G1, R2G2, R2k1/N1, R2k2/N2) - n*2π/3
 
+            rho[1+k1,1+k2,1,2] = (rho[1+k1,1+k2,1,2] + rho[1+Rk1,1+Rk2,1,2]*cis( phaseR) + rho[1+R2k1,1+R2k2,1,2]*cis( phaseR2)) / 3.
+            rho[1+k1,1+k2,2,1] = (rho[1+k1,1+k2,2,1] + rho[1+Rk1,1+Rk2,2,1]*cis(-phaseR) + rho[1+R2k1,1+R2k2,2,1]*cis(-phaseR2)) / 3.
+            rho[1+k1,1+k2,1,1] = (rho[1+k1,1+k2,1,1] + rho[1+Rk1,1+Rk2,1,1]              + rho[1+R2k1,1+R2k2,1,1]              ) / 3.
+            rho[1+k1,1+k2,2,2] = (rho[1+k1,1+k2,2,2] + rho[1+Rk1,1+Rk2,2,2]              + rho[1+R2k1,1+R2k2,2,2]              ) / 3.
+
             rho[1+Rk1,1+Rk2,1,2] = rho[1+k1,1+k2,1,2] * cis(-phaseR)
-            rho[1+Rk1,1+Rk2,2,1] = rho[1+k1,1+k2,2,1] * cis(phaseR)
+            rho[1+Rk1,1+Rk2,2,1] = rho[1+k1,1+k2,2,1] * cis( phaseR)
+            rho[1+Rk1,1+Rk2,1,1] = rho[1+k1,1+k2,1,1]
+            rho[1+Rk1,1+Rk2,2,2] = rho[1+k1,1+k2,2,2]
+
             rho[1+R2k1,1+R2k2,1,2] = rho[1+k1,1+k2,1,2] * cis(-phaseR2)
-            rho[1+R2k1,1+R2k2,2,1] = rho[1+k1,1+k2,2,1] * cis(phaseR2)
-
+            rho[1+R2k1,1+R2k2,2,1] = rho[1+k1,1+k2,2,1] * cis( phaseR2)
+            rho[1+R2k1,1+R2k2,1,1] = rho[1+k1,1+k2,1,1]
+            rho[1+R2k1,1+R2k2,2,2] = rho[1+k1,1+k2,2,2]
         end
-
-        if N1%3 == 0
-            #rho[1+N1÷3,1+N2÷3,1,2] .= 0.0;
-            #rho[1+N1÷3,1+N2÷3,2,1] .= 0.0;
-            #rho[1+N1÷3,1+N2÷3,1,1] .= 0.5;
-            #rho[1+N1÷3,1+N2÷3,2,2] .= 0.5;
-        end
-
-
     end
 
-    function C2(rho, n::Int64 = 0, sym=:T; para::LLHFNumPara)
+    
+    struct PT 
+        n::Int64
+        sym::Symbol
+    end
+    function (Inv::PT)(rho)
 
-        N1 = para.N1; N2 = Para.N2
+        N1 = size(rho, 1)
+        N2 = size(rho, 2)
+        n = mod(Inv.n, 2)
 
         identification = falses(N1,N2) # true if this element is used
         for k1 in 0:N1-1, k2 in 0:N2-1
@@ -414,29 +427,31 @@ module crystal_symmetry
                 identification[1+k1, 1+k2] = true
             end
 
-            # Ck = -k (mod G)
-            Ck1 = -k1
-            Ck2 = -k2
+            # Mk = -k (mod G)
+            Mk1 = -k1
+            Mk2 = -k2
+            MG1, Mk1 = fldmod(Mk1, N1)
+            MG2, Mk2 = fldmod(Mk2, N2)
+            identification[1+Mk1, 1+Mk2] = true
 
-            CG1 = floor(Int64, Ck1//N1)
-            CG2 = floor(Int64, Ck2//N2)
+            phase = n*π - ql_cross(MG1, MG2, Mk1/N1, Mk2/N2)
 
-            Ck1 -= CG1 * N1
-            Ck2 -= CG2 * N2
+            rho[1+k1,1+k2,1,2] = (rho[1+k1,1+k2,1,2] + rho[1+Mk1,1+Mk2,1,2]*cis( phase) ) / 2.
+            rho[1+k1,1+k2,2,1] = (rho[1+k1,1+k2,2,1] + rho[1+Mk1,1+Mk2,2,1]*cis(-phase) ) / 2.
 
-            identification[1+Ck1, 1+Ck2] = true
+            rho[1+Mk1,1+Mk2,1,2] = rho[1+k1,1+k2,1,2] * cis(-phase)
+            rho[1+Mk1,1+Mk2,2,1] = rho[1+k1,1+k2,2,1] * cis( phase)
 
-            phase = n*π - ql_cross(CG1, CG2, Ck1/N1, Ck2/N2) 
-            rho[1+Ck1,1+Ck2,1,2] = rho[1+k1,1+k2,1,2] * cis(-phase)
-            rho[1+Ck1,1+Ck2,2,1] = rho[1+k1,1+k2,2,1] * cis(phase)
-            if sym == :T
-                a = rho[1+Ck1,1+Ck2,1,1] + rho[1+k1,1+k2,2,2]
-                rho[1+Ck1,1+Ck2,1,1] .= 0.5a
-                rho[1+Ck1,1+Ck2,2,2] .= 1-0.5a
-            elseif sym == :P
-                a = rho[1+Ck1,1+Ck2,1,1] + rho[1+k1,1+k2,1,1]
-                rho[1+Ck1,1+Ck2,1,1] .= 0.5a
-                rho[1+Ck1,1+Ck2,2,2] .= 1-0.5a
+            if Inv.sym == :T
+                rho[1+k1,1+k2,1,1] = (rho[1+k1,1+k2,1,1] + rho[1+Mk1,1+Mk2,2,2] )/2.
+                rho[1+k1,1+k2,2,2] = (rho[1+k1,1+k2,2,2] + rho[1+Mk1,1+Mk2,1,1] )/2.
+                rho[1+Mk1,1+Mk2,1,1] = rho[1+k1,1+k2,2,2]
+                rho[1+Mk1,1+Mk2,2,2] = rho[1+k1,1+k2,1,1]
+            elseif Inv.sym == :P
+                rho[1+k1,1+k2,1,1] = (rho[1+k1,1+k2,1,1] + rho[1+Mk1,1+Mk2,1,1] )/2.
+                rho[1+k1,1+k2,2,2] = (rho[1+k1,1+k2,2,2] + rho[1+Mk1,1+Mk2,2,2] )/2.
+                rho[1+Mk1,1+Mk2,1,1] = rho[1+k1,1+k2,1,1]
+                rho[1+Mk1,1+Mk2,2,2] = rho[1+k1,1+k2,2,2]
             end
 
         end
@@ -444,7 +459,7 @@ module crystal_symmetry
 
 
 end
-using .crystal_symmetry
+using .CrystalSym
 
 
 
@@ -464,12 +479,12 @@ function hf_onestep!(new_rho, ρ; para::LLHFNumPara,
     end
 
     for f in post_procession
-        f(ρ)
+        f(new_rho)
     end
 
     return
 end
-function band(ρ; Hint = H_int(ρ), para::LLHFNumPara)
+function band(ρ; para::LLHFNumPara, Hint = hf_interaction(ρ,para), )
     H = Hint + para.H0
     N1 = para.N1; N2 = para.N2
     band = zeros(Float64, N1, N2, 2)
@@ -481,7 +496,7 @@ function band(ρ; Hint = H_int(ρ), para::LLHFNumPara)
 end
 function hf_converge!(ρ;
     para::LLHFNumPara, EPA = LLHF_EnergyPerArea,
-    error_tolerance = 1E-10, max_iter_times = 200,
+    error_tolerance = 1E-8, max_iter_times = 200,
     complusive_mixing = false, complusive_mixing_rate = 0.5,
     stepwise_output::Bool = false, final_output::Bool = true,
     post_process_times = 0, post_procession = [], )

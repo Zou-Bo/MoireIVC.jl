@@ -1,6 +1,6 @@
 name = "MoireIVC"
 uuid = "90551720-b59b-4cf5-9c28-9970b3de4863"
-authors = ["Bo Zou <zou.bo.phys@gmail.com> and contributors"]
+authors = ["Alice loves Bob"]
 version = "1.0.0-DEV"
 
 [deps]
