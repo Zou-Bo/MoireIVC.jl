@@ -1,0 +1,756 @@
+"""
+Do Exact Diagonalization for two regions in BZ.
+The two regions contains two Dirac Points with large momentum kD1, kD2.
+Small momentum is the momentum relative to Dirac Points (DP)
+Use Landau level quasi-Bloch wavefunctions
+
+Import same system parameters from LLHF.
+
+Input numerical parameter includes:
+Some k points around the two Dirac points,
+One-body Hamiltonian determined by outside mean field.
+Valley number is not a good quantum number.
+Without Umklapp, electron number in each DP region is conserved.
+
+Calculate the ED within the block specified with:
+electron number in DC and total small momentum.
+
+"""
+#module LLED
+
+
+
+
+using MKL, LinearAlgebra
+using PhysicalUnits
+using Combinatorics
+using SparseArrays, ExtendableSparse, KrylovKit
+using MoireIVC.Basics: laguerrel, ql_cross, my_searchsortedfirst
+using MoireIVC.LLHF: LLHFSysPara, LLHFNumPara
+
+# initiation
+begin
+    @kwdef struct LLEDPara
+        k_list::Matrix{Int64}
+        k_num::Int64 = size(k_list, 2)
+
+        # H_meanfield[k,s,s',kD] c†_{k,s,kD} c_{k,s',kD}
+        Hmf::Array{ComplexF64, 4}
+
+        # Nk × Nk k-mesh, need to be a multiple of 3
+        Nk::Int64
+        LL::Int64
+        system::LLHFSysPara
+    end
+    """
+    parameters of ED calculation
+    Nk×Nk k-mesh where 3|Nk;
+    LL -> Landau level index;
+    k_list[:,k] = [k1; k2] -> "small" momentum = k1/Nk * G1 +  k2/Nk * G2,
+    where k: 1~k_num;
+    Dirac point "large" momentum: kD1 = 1/3 * (G1+G2), kD2 = 2/3 * (G1+G2);
+    mean-field Hamiltonian: Hmf[k,s,s',kD] c†_{k,s,kD} c_{k,s',kD};
+    system::LLHFSysPara contains G1, G2, Gl;
+    """
+    function LLED_init(k_list, Hmf, syspara, N, LL)
+        if N%3 !=0
+            N = N%3 * 3
+            @warn "Input k-mesh is not 3n×3n, changed to $N×$N."
+        end
+        k_num = size(k_list, 2)
+        if size(k_list, 1) != 2
+            error("Input k_list should have 2 rows")
+        end
+        if size(Hmf) != (k_num, 2, 2, 2)
+            error("Input mean field size incompatible to k_list")
+        end
+        return LLEDPara(; k_list = k_list, Hmf = Hmf, Nk = N, system = syspara, LL = LL)
+    end
+end
+
+
+
+
+##################################################
+# Single electron states are labeled with 
+# 1. spin: s=1,2 for spin up and down
+# 2. Dirac point: kD = 1,2 
+# 3. small momentum: k = 1~k_num in the input liste
+# The many-body state denoted by Int64/bit-array
+# Each bit is a single-electron state 1 << i
+# Bit index i = (k-1) + k_num(s-1) + 2k_num(kD-1)
+##################################################
+begin
+    """
+    The struct of many-body state consists of 
+        n: the integer consist of bit array
+        i: vector of occupies bit numbers
+        k1, k2: total small momentum
+    """
+    struct MBS
+        n::Int64
+        i::Vector{Int64}
+        k1::Int64
+        k2::Int64
+        bits::Int64
+    end
+    import Base: *, isless
+    function *(mbs1::MBS, mbs2::MBS)
+        MBS(mbs1.n << mbs2.bits | mbs2.n, vcat(mbs2.i, (mbs1.i) .+ mbs2.bits ),
+            mbs1.k1 + mbs2.k1, mbs1.k2 + mbs2.k2, mbs1.bits+mbs2.bits
+        )
+    end
+    function isless(mbs1::MBS, mbs2::MBS)
+        isless(mbs1.n, mbs2.n)
+    end
+
+
+    """
+    Return the total small momentum K1 and K2 of a many body state.
+    bit index i = (k-1) + k_num(s-1) + 2k_num(kD-1)
+    """
+    function TotalMomentum(para::LLEDPara, i_list::Vector{Int})
+        k1 = 0; k2 = 0
+        for i in i_list
+            momentum = para.k_list[:, i%para.k_num + 1]
+            k1 += momentum[1]
+            k2 += momentum[2]
+        end
+        return k1, k2
+    end
+
+
+    function MBSList_oneDiracCone(para::LLEDPara, N_in_one::Int64)
+        k_num = para.k_num
+        N_in_one > 2k_num && error("the maximum number of electrons
+            in one Dirac cone is $(2k_num) set by current k_index_list")
+        sort([MBS(sum(1 .<< combi), combi, TotalMomentum(para,combi)..., 2k_num)
+            for combi in collect(combinations(0:2k_num-1, N_in_one))
+        ])
+    end
+    """
+    define DiracCone distribution
+    return a list of MBS with electron number (N1, N2)
+    """
+    MBSList_twoDiracCone(para::LLEDPara, N1::Int64, N2::Int64) = 
+        kron(MBSList_oneDiracCone(para, N2), MBSList_oneDiracCone(para, N1))
+    """
+    return blocks with same samll total momentum,
+    Input: MBS list
+    Output:
+    1. list of block MBS list,
+    2. list of k1 of blocks,
+    3. list of k2 if blocks,
+    4. list incex of the k1=k2=0 block (return 0 if not exist)
+    """
+    function Block_smallmomentum(mbs_list::Vector{MBS};
+        restrict_total_mmt = true, k1range=(-2,2), k2range=(-2,2))
+
+        blocks = Vector{MBS}[];
+        block_k1 = Int64[];
+        block_k2 = Int64[];
+        k1min, k1max = extrema(getfield.(mbs_list,:k1))
+        k2min, k2max = extrema(getfield.(mbs_list,:k2))
+        if restrict_total_mmt
+            k1min = max(k1range[1], k1min)
+            k2min = max(k2range[1], k2min)
+            k1max = min(k1range[2], k1max)
+            k2max = min(k2range[2], k2max)
+        end
+        for K1 in k1min:k1max, K2 in k2min:k2max
+            mask = findall(mbs -> mbs.k1==K1 && mbs.k2==K2, mbs_list)
+            if length(mask) != 0
+                push!(blocks, mbs_list[mask])
+                push!(block_k1, K1)
+                push!(block_k2, K2)
+            end
+        end
+        block_num_0 = findfirst(eachindex(block_k1)) do bn
+            block_k1[bn]==0 && block_k2[bn]==0
+        end
+        return blocks, block_k1, block_k2, block_num_0
+    end
+end
+
+
+
+
+# generate interaction terms (V, i4, i3, i2, i1)
+begin
+    "calculate interaction strength based on (q1, q2)*G/Nk"
+    function VFF(q::Vector{Int64}, para::LLEDPara)
+        q1, q2 = q
+        Gl = para.system.Gl
+        W0 = para.system.W0
+        D_l = para.system.D / para.system.l
+        Nk = para.Nk
+        LL = para.LL
+
+        if q1 == 0 && q2 == 0
+            return D_l * W0 / Nk^2
+        else
+            ql = sqrt(q1^2 + q2^2 + q1*q2) * Gl / Nk
+            V = 1.0 / ql * tanh(ql*D_l)
+            FF = laguerrel(LL, 0, ql^2/2)^2 * exp(-ql^2/2)
+            return V * FF * W0 / Nk^2
+        end
+    end
+    """
+    calculate the interaction phase: 
+
+    <kf | exp{-i[q⋅r + G⋅r]} | ki>, q=ki-kf
+
+    For <kf | exp{+i[q⋅r + G⋅r]} | ki>, q=kf-ki,
+    use -G simply.
+    """
+    function Form_phase(ki, kf, G, spin, Nk)
+        ki1 = ki[1]; ki2 = ki[2]
+        kf1 = kf[1]; kf2 = kf[2]
+        phase = 0.5*ql_cross(kf1/Nk, kf2/Nk, ki1/Nk, ki2/Nk)
+        phase+= 0.5*ql_cross((ki1+kf1)/Nk, (ki2+kf2)/Nk, G[1], G[2])
+        phase *= 3-2spin
+        return phase
+    end
+    # find groups of pairs
+    function k_pair_groups(para::LLEDPara)
+        k_num = para.k_num
+        pair_groups = Vector{Vector{Int64}}[]
+        k_pairs = [MBS(0, pair, TotalMomentum(para, pair)..., 0)
+            for pair in collect(with_replacement_combinations(0:k_num-1, 2))
+        ]
+        k1min, k1max = extrema(mbs -> mbs.k1, k_pairs)
+        k2min, k2max = extrema(mbs -> mbs.k2, k_pairs)
+        for K1 in k1min:k1max, K2 in k2min:k2max
+            group = findall(mbs -> mbs.k1==K1 && mbs.k2==K2, k_pairs)
+            if length(group) != 0
+                push!(pair_groups, getfield.(k_pairs[group] ,:i))
+            end
+        end
+        return pair_groups
+    end
+    # normal order
+    function normal_order_push!(int_list, int)
+
+        V, i4, i3, i2, i1 = int
+
+        if i4 == i3 && i1 == i2
+            return
+        end
+        if i4 < i3
+            i3, i4 = (i4, i3)
+            V = -V
+        end
+        if i1 < i2
+            i1, i2 = (i2, i1)
+            V = -V
+        end
+        if i1 < i4
+            println("$i4 $i3 $i2 $i1")
+            i1, i4 = (i4, i1)
+            i2, i3 = (i3, i2)
+            V = conj(V)
+        end
+        push!(int_list, (V, i4, i3, i2, i1))
+    end
+    """
+    generate interaction terms
+    step 1:
+    Pair the small momentum, and 
+    divide them into groups with same total small momentum
+    The scattering conserved small momentum,
+    incident pair (1,2) -> output pair (3,4) have same samll momentum
+    step 2:
+    list all the scattering term in form of:
+    V * c†_4 c†_3 c_2 c_1 (+ h.c. if 1,2≠3,4)
+    use normal order: i4 > i3 && i1 > i2 && i1 >= i4
+    explain:
+    (1) switch 3<->4 and 1<->2 gives the same term, canceling off 1/2 prefactor
+    (2) switch only 3<->4 corresponds to the Hartree and Fock separately, summed in amplitute V.
+    (3) switch 1<->4 and 2<->3 gives complex conjugate:
+    only the normal ordered one is listed here,
+    the other will be considered when generating H.
+    """
+    function interaction_list(para::LLEDPara; groups = k_pair_groups(para), g_shell = 3)
+        
+        k_list = para.k_list
+        k_num = para.k_num
+        NK = para.Nk÷3
+
+        list = Tuple{ComplexF64, Int64, Int64, Int64, Int64}[]
+
+        for group in groups
+            for pair_in in eachindex(group), pair_out in eachindex(group)
+                
+                # scattering from pair_in to pair_out
+                if pair_out > pair_in
+                    continue
+                end
+                k2, k1 = sort(group[pair_in ] .+1 )
+                k3, k4 = sort(group[pair_out] .+1 )
+
+
+                # 1. same kD
+                for kD in 1:2
+                    k1index = k_list[:,k1] + [kD*NK; kD*NK]
+                    k2index = k_list[:,k2] + [kD*NK; kD*NK]
+                    k3index = k_list[:,k3] + [kD*NK; kD*NK]
+                    k4index = k_list[:,k4] + [kD*NK; kD*NK]
+                    
+                    #1.1 same spin
+                    for spin in 1:2
+                        i1 = k1-1 + k_num*(spin-1) + 2k_num*(kD-1)
+                        i2 = k2-1 + k_num*(spin-1) + 2k_num*(kD-1)
+                        i3 = k3-1 + k_num*(spin-1) + 2k_num*(kD-1)
+                        i4 = k4-1 + k_num*(spin-1) + 2k_num*(kD-1)
+                        if i1 == i2 || i3 == i4
+                            continue
+                        end
+
+                        V = ComplexF64(0.0)
+                        for g1 in -g_shell:g_shell, g2 in -g_shell:g_shell
+                            if abs(g1+g2) > g_shell
+                                continue
+                            end
+                            V += VFF(k4index .- k1index .+ (g1, g2).*3NK, para) * 
+                                cis(Form_phase(k1index, k4index, (g1,g2), spin, 3NK)
+                                + Form_phase(k2index, k3index, (-g1,-g2), spin, 3NK))
+                            V -= VFF(k3index .- k1index .+ (g1, g2).*3NK, para) * 
+                                cis(Form_phase(k1index, k3index, (g1,g2), spin, 3NK)
+                                + Form_phase(k2index, k4index, (-g1,-g2), spin, 3NK))
+                        end
+                        
+                        normal_order_push!(list, (V,i4,i3,i2,i1))
+                    end
+
+                    # 1.2 opposite spin
+                    for spin1 in 1:2, spin4 in 1:2
+                        spin2 = 3-spin1;
+                        spin3 = 3-spin4;
+                        if k1==k2 && spin1 < spin2 || k3==k4 && spin4 < spin3
+                            continue
+                        end
+                        if pair_in == pair_out && spin1 < spin4
+                            continue
+                        end
+                        i1 = k1-1 + k_num*(spin1-1) + 2k_num*(kD-1)
+                        i2 = k2-1 + k_num*(spin2-1) + 2k_num*(kD-1)
+                        i3 = k3-1 + k_num*(spin3-1) + 2k_num*(kD-1)
+                        i4 = k4-1 + k_num*(spin4-1) + 2k_num*(kD-1)
+
+
+                        V = ComplexF64(0.0)
+                        for g1 in -g_shell:g_shell, g2 in -g_shell:g_shell
+                            if abs(g1+g2) > g_shell
+                                continue
+                            end
+                            #VV=0.0
+                            if spin1 == spin4
+                                V += VFF(k4index .- k1index .+ (g1, g2).*3NK, para) * 
+                                cis(Form_phase(k1index, k4index, (g1,g2), spin1, 3NK)
+                                + Form_phase(k2index, k3index, (-g1,-g2), spin2, 3NK))
+                            else
+                                V -= VFF(k3index .- k1index .+ (g1, g2).*3NK, para) * 
+                                cis(Form_phase(k1index, k3index, (g1,g2), spin1, 3NK)
+                                + Form_phase(k2index, k4index, (-g1,-g2), spin2, 3NK))
+                            end
+                            #println(g1, '\t', g2, '\t', VV)
+                            #V+=VV
+                        end
+
+                        normal_order_push!(list, (V,i4,i3,i2,i1))
+                    end
+                end
+
+                
+                # 2. opposite kD
+                for kD1 in 1:2, kD4 in 1:2
+                    kD2 = 3-kD1;
+                    kD3 = 3-kD4;
+                    if k1==k2 && kD1 < kD2 || k3==k4 && kD4 < kD3
+                        continue
+                    end
+                    k1index = k_index[:,k1] + [kD1*NK; kD1*NK]
+                    k2index = k_index[:,k2] + [kD2*NK; kD2*NK]
+                    k3index = k_index[:,k3] + [kD3*NK; kD3*NK]
+                    k4index = k_index[:,k4] + [kD4*NK; kD4*NK]
+                    
+                    #2.1 same spin
+                    for spin in 1:2
+                        if pair_in == pair_out && kD1 < kD4
+                            continue
+                        end
+                        i1 = k1-1 + k_num*(spin-1) + 2k_num*(kD1-1)
+                        i2 = k2-1 + k_num*(spin-1) + 2k_num*(kD2-1)
+                        i3 = k3-1 + k_num*(spin-1) + 2k_num*(kD3-1)
+                        i4 = k4-1 + k_num*(spin-1) + 2k_num*(kD4-1)
+
+                        V = ComplexF64(0.0)
+                        for g1 in -g_shell:g_shell, g2 in -g_shell:g_shell
+                            if abs(g1+g2) > g_shell
+                                continue
+                            end
+                            V += VFF(k4index .- k1index .+ (g1, g2).*3NK, para) * 
+                                cis(Form_phase(k1index, k4index, (g1,g2), spin, 3NK)
+                                + Form_phase(k2index, k3index, (-g1,-g2), spin, 3NK))
+                            V -= VFF(k3index .- k1index .+ (g1, g2).*3NK, para) * 
+                                cis(Form_phase(k1index, k3index, (g1,g2), spin, 3NK)
+                                + Form_phase(k2index, k4index, (-g1,-g2), spin, 3NK))
+                        end
+
+                        normal_order_push!(list, (V,i4,i3,i2,i1))
+                    end
+
+                    # 2.2 opposite spin
+                    for spin1 in 1:2, spin4 in 1:2
+                        spin2 = 3-spin1;
+                        spin3 = 3-spin4;
+                        if pair_in == pair_out 
+                            if spin1==spin4 && kD1 < kD4
+                                continue
+                            elseif kD1==kD4 && spin1 < spin4
+                                continue
+                            end
+                        end
+                        i1 = k1-1 + k_num*(spin1-1) + 2k_num*(kD1-1)
+                        i2 = k2-1 + k_num*(spin2-1) + 2k_num*(kD2-1)
+                        i3 = k3-1 + k_num*(spin3-1) + 2k_num*(kD3-1)
+                        i4 = k4-1 + k_num*(spin4-1) + 2k_num*(kD4-1)
+
+
+                        V = ComplexF64(0.0)
+                        for g1 in -g_shell:g_shell, g2 in -g_shell:g_shell
+                            if abs(g1+g2) > g_shell
+                                continue
+                            end
+                            if spin1 == spin4
+                                V += VFF(k4index .- k1index .+ (g1, g2).*3NK, para) * 
+                                cis(Form_phase(k1index, k4index, (g1,g2), spin1, 3NK)
+                                + Form_phase(k2index, k3index, (-g1,-g2), spin2, 3NK))
+                            else
+                                V -= VFF(k3index .- k1index .+ (g1, g2).*3NK, para) * 
+                                cis(Form_phase(k1index, k3index, (g1,g2), spin1, 3NK)
+                                + Form_phase(k2index, k4index, (-g1,-g2), spin2, 3NK))
+                            end
+                        end
+
+                        normal_order_push!(list, (V,i4,i3,i2,i1))
+                    end
+                end
+
+
+
+            end
+        end
+        return list
+    end
+
+
+
+
+end
+
+# generate Hamiltonian
+begin
+    """
+    Add mean-field terms to Hamiltonian. Only the upper triangle half.
+    """
+    function add_mean_field!(H,
+    sorted_state_num_list::Vector{Int64}, para::LLEDPara)
+
+        H_meanfield = para.Hmf
+        k_num = para.k_num
+
+        # H * c†_s c_s′ + h.c.
+        for i in eachindex(sorted_state_num_list)
+            num = sorted_state_num_list[i]
+            for k in 1:k_num, kD in 1:2
+    
+                i_up = (k-1) + k_num*0 + 2k_num*(kD-1)
+                i_dn = (k-1) + k_num*1 + 2k_num*(kD-1)
+    
+                # 1. same spin
+                h = ComplexF64(0.0)
+                if isodd(num >>> i_up)
+                    h += real(H_meanfield[k,1,1,kD])
+                end
+                if isodd(num >>> i_dn)
+                    h += real(H_meanfield[k,2,2,kD])
+                end
+                updateindex!(H,+,h, i,i)  
+                # 2. different spin
+                if isodd(num >>> i_up) && iseven(num >>> i_dn)
+                    # i -> up, j -> dn
+                    # num_up = num
+                    num_dn = num - (1 << i_up) + (1 << i_dn)
+                    j = my_searchsortedfirst(sorted_state_num_list, num_dn)
+                    if j == 0
+                        error("wrong block list")
+                    end
+                    imin, imax = (min(i_up, i_dn), max(i_up, i_dn) )
+                    sign_flip = sum(ii -> (num >>> ii)%2, imin+1:imax-1; init = 0)
+                    sign = isodd(sign_flip) ? -1 : 1
+                    if j > i
+                    updateindex!(H,+, sign * H_meanfield[k,1,2,kD], i,j)
+                    else
+                    updateindex!(H,+, sign * H_meanfield[k,2,1,kD], j,i)
+                    end
+                end
+            end
+        end
+    end
+    """
+    Add one interaction term to Hamiltonian. Only the upper triangle half.
+    """
+    function add_interaction!(H, 
+        V::ComplexF64, i4::Int64, i3::Int64, i2::Int64, i1::Int64, 
+        sorted_state_num_list::Vector{Int64})
+
+        # interaction V * c†_4 c†_3 c_2 c_1
+        # i4 > i3 && i1 > i2
+        # i1 >= i4
+    
+        a = (1 << i3) | (1 << i4)
+        b = (1 << i1) | (1 << i2)
+        for j in eachindex(sorted_state_num_list)
+            num1 = sorted_state_num_list[j]
+            isodd(num1 >>> i1) && isodd(num1 >>> i2) || continue
+            num2 = num1 - b
+            iseven(num1 >>> i3) && iseven(num1 >>> i4) || continue
+            num3 = num2 + a
+            i = my_searchsortedfirst(sorted_state_num_list, num3)
+            iszero(i) && error("wrong interaction list.")
+    
+            sign_flip = sum(i->isodd(num2>>>i), [i2+1:i1-1; i3+1:i4-1]; init=0)
+            isodd(sign_flip) && (V = -V)
+    
+            if i != j
+                #H[i,j] += V
+                #H[j,i] += conj(V)
+                updateindex!(H, +, V, i,j)
+                #updateindex!(H, +, conj(V), j,i)
+            else
+                #H[i,i] += real(V)
+                updateindex!(H, +, real(V), i,i)
+            end
+        end
+    end
+    """
+    Add all interaction terms to Hamiltonian. Only the upper triangle half.
+    print out indicators for every N_print interaction terms
+    """
+    function add_all_interaction!(H, sorted_state_num_list::Vector{Int64}, 
+        int_list::Vector{Tuple{ComplexF64, Int64, Int64, Int64, Int64}};
+        N_print=100)
+        
+        for i in eachindex(int_list)
+            if i%N_print == 0
+                print("$i ")
+            end
+            add_interaction!(H, int_list[i]..., sorted_state_num_list)
+        end
+
+    end
+    "generate Hamiltonian for the given block"
+    function Block_Hamiltonian(block_MBSList, interaction_list, para::LLEDPara;
+        N_print = 100)
+
+        size = length(block_MBSList)
+        num_list = sort(getfield.(block_MBSList, :n))
+        H = ExtendableSparseMatrix(ComplexF64, size, size)
+        add_mean_field!(H, num_list, para)
+        add_all_interaction!(H, num_list, interaction_list; N_print = N_print)
+
+        return ExtendableSparseMatrix(Hermitian(H))
+    end
+end
+
+
+
+
+
+
+#end
+using MoireIVC.LLHF
+system = LLHF.define_system();
+k_index = [
+     0;  0;;
+    +1;  0;;
+     0; +1;;
+    -1; +1;;
+    -1;  0;;
+     0; -1;;
+    +1; -1;;
+]
+E_1 = 5.37meV
+# Hmf[k,s,s',kD] c†_{k,s,kD} c_{k,s',kD};
+function symmetrize_meanfield!(E_1=E_1, k_index=k_index)
+    k_num = size(k_index,2)
+
+    Hmf = zeros(ComplexF64, k_num, 2, 2, 2)
+    if k_num == 1
+        return Hmf
+    elseif k_num == 7
+
+        h1diag = 0.0
+        h1offd = E_1
+        for i in 1:6
+            phase = ((i-1)/3-1/6)*pi
+            Hmf[1+i,:,:,1] .=[h1diag;  h1offd*cis(phase);;  h1offd*cis(-phase); h1diag] 
+            Hmf[1+i,:,:,2] .=[h1diag; -h1offd*cis(phase);; -h1offd*cis(-phase); h1diag] 
+        end
+
+        return Hmf
+    else
+        error("k_num should be 0 or 7")
+    end
+end
+Hmf=symmetrize_meanfield!()
+para = LLED_init(k_index, Hmf, system, 30, 1);
+
+try_mbslist = MBSList_twoDiracCone(para, 2, 2)
+blocks, block_k1, block_k2, bn0 = 
+Block_smallmomentum(MBSList_twoDiracCone(para, 7, 7));
+blocks[bn0]
+InteractionList = interaction_list(para)
+
+##########################################
+
+total_block_num = length(blocks)
+eigenenergy = Matrix{Float64}(undef, 10, total_block_num);
+for bn in eachindex(blocks)
+    println(bn, "\t", length(blocks[bn]))
+    @time H = Block_Hamiltonian(blocks[bn], InteractionList, para)
+    vec0 = rand(ComplexF64, length(blocks[bn]))
+    @time vals, vecs, info = eigsolve(H, vec0, 10, :SR, ishermitian=true);
+    if length(vals) >= 10
+        eigenenergy[:,bn] = real.(vals[1:10])
+    else
+        eigenenergy[1:length(vals),bn] = real.(vals)
+        eigenenergy[1+length(vals):10,bn] = NaN
+    end
+end
+
+using CairoMakie
+begin
+    eigEs = Figure(size = (800,600));
+    ax = Axis(eigEs[1,1],
+        xlabel = "k1+5k2",
+    )
+    for bn in eachindex(blocks)
+        xticknumber = block_k1[bn] + 5block_k2[bn]
+        for j in 1:10
+            if !isnan(eigenenergy[j, bn])
+                scatter!(ax, xticknumber, eigenenergy[j, bn];
+                    color=:black, marker=:hline
+                )
+            end
+        end
+    end
+    #ylims!(-555, -550)
+    eigEs
+end
+begin
+    lowest_E = Figure(size = (800,600));
+    ax_le = Axis(lowest_E[1,1])
+    Emin = vec(eigenenergy[1,:])
+    block_kx = block_k1 .* system.G1[1] + block_k2 .* system.G2[1]
+    block_ky = block_k1 .* system.G1[2] + block_k2 .* system.G2[2]
+    scatter!(ax_le, block_kx, block_ky;
+        color = Emin, markersize = 20
+    )
+    lowest_E
+end
+
+
+#################################################
+
+HK0 = Block_Hamiltonian(blocks[bn0], InteractionList, para)
+ishermitian(HK0)
+@time valsK0, vecsK0, info = eigsolve(HK0, rand(ComplexF64, HK0.cscmatrix.n), 10, :SR, ishermitian=true);
+valsK0
+
+
+psi1 = vecsK0[1];
+psi2 = vecsK0[2];
+psi3 = vecsK0[3];
+psi4 = vecsK0[4];
+psi5 = vecsK0[5];
+psi6 = vecsK0[6];
+
+sum(i -> (abs2(psi1[i])>1e-6), eachindex(psi1); init = 0)
+lines(diff(log.(sort(abs2.(psi1))))[end-10000:end])
+
+lines(abs2.(psi1))
+lines(abs2.(psi2))
+lines(abs2.(psi3))
+lines(abs2.(psi4))
+lines(abs2.(psi5))
+lines(abs2.(psi6))
+
+blocks[bn0][7]
+
+function find_index(spin1, spin2, mbs_list = blocks[bn0])
+    index = Int64[]
+    i1 = 7(spin1-1)
+    i2 = 7(spin2-1)+14
+    for i in eachindex(mbs_list)
+        if any(==(i1), mbs_list[i].i) && any(==(i2), mbs_list[i].i)
+            push!(index, i)
+        end
+    end
+    return index
+end
+(maximum(abs2.(psi1)[find_index(1,1)]) * 2^12 +
+ maximum(abs2.(psi1)[find_index(1,2)]) * 2^12 +
+ maximum(abs2.(psi1)[find_index(2,1)]) * 2^12 +
+ maximum(abs2.(psi1)[find_index(2,2)]) * 2^12 ) 
+1
+
+
+
+function one_body_reduced_density_matrix(psi, block_MBSList; para::LLEDPara,
+    cutoff = 1E-7)
+
+    k_num = para.k_num
+    sorted_state_num_list = getfield.(block_MBSList, :n)
+
+    # DM[i,i′] = <c†_i′ c_i> = <psi | c†_i′ c_i | psi>
+    onebodyRDM = zeros(ComplexF64, 4k_num, 4k_num)
+    index_list = findall( x -> x>cutoff, abs2.(psi))
+    psi = psi[index_list]
+    sorted_state_num_list = sorted_state_num_list[index_list]
+    Threads.@threads for i in 0:4k_num-1
+        for i′ in 0:4k_num-1
+            if i == i′
+                for index in eachindex(sorted_state_num_list)
+                    num = sorted_state_num_list[index]
+                    isodd(num >>> i) && (onebodyRDM[1+i,1+i] += abs2(psi[index]))
+                end
+            elseif i < i′
+                for index in eachindex(sorted_state_num_list)
+                    num = sorted_state_num_list[index]
+                    if isodd(num >>> i) && iseven(num >>> i′)
+                        num′ = num - (1 << i) + (1 << i′)
+                        index′ = my_searchsortedfirst(sorted_state_num_list, num′)
+                        if index′ == 0
+                            continue
+                        end
+                        rhoii′ = conj(psi[index′]) * psi[index]
+                        sign_flip = sum(ii -> (num >>> ii)%2, i+1:i′-1; init = 0)
+                        isodd(sign_flip) && (rhoii′ = -rhoii′)
+                        onebodyRDM[1+i, 1+i′] += rhoii′
+                        onebodyRDM[1+i′, 1+i] += conj(rhoii′)
+                    end
+                end
+            end
+        end
+    end
+    return onebodyRDM
+end
+
+onebodyRDM = one_body_reduced_density_matrix(vecsK0[4], blocks[bn0]; para=para)
+tr(onebodyRDM)/28
+heatmap(abs.(onebodyRDM), colorrange = (0,1))
+maximum(abs.(onebodyRDM))
+dot(vecsK0[1], vecsK0[4])
+

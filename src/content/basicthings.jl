@@ -50,4 +50,16 @@ module Basics
         return γ2
     end
 
+
+
+    "search the index of the first object, return 0 if it's absent."
+    function my_searchsortedfirst(list, i)
+        index = searchsortedfirst(list, i)
+        if index > lastindex(list) || list[index] != i
+          return 0
+        else
+          return index
+        end
+    end
+
 end
