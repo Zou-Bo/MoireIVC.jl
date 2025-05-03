@@ -3,7 +3,7 @@ module LLHF_Plot
 using MKL
 using LinearAlgebra
 using PhysicalUnits
-using CairoMakie, GLMakie, Printf
+using GLMakie, CairoMakie, Printf
 CairoMakie.activate!()
 using MoireIVC.LLHF
 using MoireIVC.LLHF: LLHFNumPara, LLHFSysPara
