@@ -10,6 +10,7 @@ export LLHF_change_alpha!, LLHF_change_lambda!
 export LLHF_EnergyPerArea, LLHF_solve
 public polar_azimuthal_angles, berry_curvature, realspace_pauli
 public VP_solution, add_phi!
+public Trans, Rot3, PT
 
 
 
@@ -294,7 +295,7 @@ end
 
 
 
-# in construction
+# post-processes that enforce the symmetry
 module CrystalSym
 
     using MKL, LinearAlgebra
@@ -464,7 +465,6 @@ using .CrystalSym
 
 
 # only T=0
-# only use non-zero filling when LL1==LL2
 function hf_onestep!(new_rho, ρ; para::LLHFNumPara,
     Hint = hf_interaction(ρ, para), 
     post_procession=[],
