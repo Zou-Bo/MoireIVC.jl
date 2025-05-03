@@ -14,6 +14,9 @@ using .LLHF
 include("plot/LL HF plot.jl")
 using .LLHF_Plot
 
+include("content/LL ED.jl")
+using .LLED
+
 
 
 

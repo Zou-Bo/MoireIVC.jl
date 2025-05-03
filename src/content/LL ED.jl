@@ -16,7 +16,13 @@ Calculate the ED within the block specified with:
 electron number in DC and total small momentum.
 
 """
-#module LLED
+module LLED
+
+export LLEDPara, LLED_init
+export MBS, LLED_mbs_list_twoDiracCone
+export LLED_block_bysmallmomentum, LLED_interactionlist
+export LLED_Block_Hamiltonian, LLED_solve
+public reduced_density_matrix, one_body_reduced_density_matrix, entanglement_entropy 
 
 
 
@@ -120,7 +126,7 @@ begin
     end
 
 
-    function MBSList_oneDiracCone(para::LLEDPara, N_in_one::Int64)
+    function mbslist_oneDiracCone(para::LLEDPara, N_in_one::Int64)
         k_num = para.k_num
         N_in_one > 2k_num && error("the maximum number of electrons
             in one Dirac cone is $(2k_num) set by current k_index_list")
@@ -132,8 +138,8 @@ begin
     define DiracCone distribution
     return a list of MBS with electron number (N1, N2)
     """
-    MBSList_twoDiracCone(para::LLEDPara, N1::Int64, N2::Int64) = 
-        kron(MBSList_oneDiracCone(para, N2), MBSList_oneDiracCone(para, N1))
+    LLED_mbslist_twoDiracCone(para::LLEDPara, N1::Int64, N2::Int64) = 
+        kron(mbslist_oneDiracCone(para, N2), mbslist_oneDiracCone(para, N1))
     """
     return blocks with same samll total momentum,
     Input: MBS list
@@ -143,7 +149,7 @@ begin
     3. list of k2 if blocks,
     4. list incex of the k1=k2=0 block (return 0 if not exist)
     """
-    function Block_smallmomentum(mbs_list::Vector{MBS};
+    function LLED_block_bysmallmomentum(mbs_list::Vector{MBS};
         restrict_total_mmt = true, k1range=(-2,2), k2range=(-2,2))
 
         blocks = Vector{MBS}[];
@@ -245,7 +251,6 @@ begin
             V = -V
         end
         if i1 < i4
-            println("$i4 $i3 $i2 $i1")
             i1, i4 = (i4, i1)
             i2, i3 = (i3, i2)
             V = conj(V)
@@ -270,7 +275,7 @@ begin
     only the normal ordered one is listed here,
     the other will be considered when generating H.
     """
-    function interaction_list(para::LLEDPara; groups = k_pair_groups(para), g_shell = 3)
+    function LLED_interactionlist(para::LLEDPara; groups = k_pair_groups(para), g_shell = 3)
         
         k_list = para.k_list
         k_num = para.k_num
@@ -343,7 +348,6 @@ begin
                             if abs(g1+g2) > g_shell
                                 continue
                             end
-                            #VV=0.0
                             if spin1 == spin4
                                 V += VFF(k4index .- k1index .+ (g1, g2).*3NK, para) * 
                                 cis(Form_phase(k1index, k4index, (g1,g2), spin1, 3NK)
@@ -353,8 +357,6 @@ begin
                                 cis(Form_phase(k1index, k3index, (g1,g2), spin1, 3NK)
                                 + Form_phase(k2index, k4index, (-g1,-g2), spin2, 3NK))
                             end
-                            #println(g1, '\t', g2, '\t', VV)
-                            #V+=VV
                         end
 
                         normal_order_push!(list, (V,i4,i3,i2,i1))
@@ -449,7 +451,7 @@ begin
 
 end
 
-# generate Hamiltonian
+# generate Hamiltonian and slove it
 begin
     """
     Add mean-field terms to Hamiltonian. Only the upper triangle half.
@@ -515,7 +517,7 @@ begin
             num1 = sorted_state_num_list[j]
             isodd(num1 >>> i1) && isodd(num1 >>> i2) || continue
             num2 = num1 - b
-            iseven(num1 >>> i3) && iseven(num1 >>> i4) || continue
+            iseven(num2 >>> i3) && iseven(num2 >>> i4) || continue
             num3 = num2 + a
             i = my_searchsortedfirst(sorted_state_num_list, num3)
             iszero(i) && error("wrong interaction list.")
@@ -550,8 +552,12 @@ begin
         end
 
     end
-    "generate Hamiltonian for the given block"
-    function Block_Hamiltonian(block_MBSList, interaction_list, para::LLEDPara;
+    """
+    Generate Hamiltonian of a given block
+    Input: block_MBSList, interaction_list, LLED_parameter
+    Parameter: print out whenever some number of interactions are added 
+    """
+    function LLED_Block_Hamiltonian(block_MBSList, interaction_list, para::LLEDPara;
         N_print = 100)
 
         size = length(block_MBSList)
@@ -559,168 +565,33 @@ begin
         H = ExtendableSparseMatrix(ComplexF64, size, size)
         add_mean_field!(H, num_list, para)
         add_all_interaction!(H, num_list, interaction_list; N_print = N_print)
-
         return ExtendableSparseMatrix(Hermitian(H))
     end
-end
-
-
-
-
-
-
-#end
-using MoireIVC.LLHF
-system = LLHF.define_system();
-k_index = [
-     0;  0;;
-    +1;  0;;
-     0; +1;;
-    -1; +1;;
-    -1;  0;;
-     0; -1;;
-    +1; -1;;
-]
-E_1 = 5.37meV
-# Hmf[k,s,s',kD] c†_{k,s,kD} c_{k,s',kD};
-function symmetrize_meanfield!(E_1=E_1, k_index=k_index)
-    k_num = size(k_index,2)
-
-    Hmf = zeros(ComplexF64, k_num, 2, 2, 2)
-    if k_num == 1
-        return Hmf
-    elseif k_num == 7
-
-        h1diag = 0.0
-        h1offd = E_1
-        for i in 1:6
-            phase = ((i-1)/3-1/6)*pi
-            Hmf[1+i,:,:,1] .=[h1diag;  h1offd*cis(phase);;  h1offd*cis(-phase); h1diag] 
-            Hmf[1+i,:,:,2] .=[h1diag; -h1offd*cis(phase);; -h1offd*cis(-phase); h1diag] 
-        end
-
-        return Hmf
-    else
-        error("k_num should be 0 or 7")
+    "Solve H with n eigenstates with lowest eigenenergy"
+    function LLED_solve(H::ExtendableSparseMatrix, n::Int64=6)
+        vec0 = rand(ComplexF64, H.cscmatrix.m)
+        vals, vecs, info = eigsolve(H, vec0, n, :SR, ishermitian=true);
+        return vals, vecs
     end
-end
-Hmf=symmetrize_meanfield!()
-para = LLED_init(k_index, Hmf, system, 30, 1);
 
-try_mbslist = MBSList_twoDiracCone(para, 2, 2)
-blocks, block_k1, block_k2, bn0 = 
-Block_smallmomentum(MBSList_twoDiracCone(para, 7, 7));
-blocks[bn0]
-InteractionList = interaction_list(para)
-
-##########################################
-
-total_block_num = length(blocks)
-eigenenergy = Matrix{Float64}(undef, 10, total_block_num);
-for bn in eachindex(blocks)
-    println(bn, "\t", length(blocks[bn]))
-    @time H = Block_Hamiltonian(blocks[bn], InteractionList, para)
-    vec0 = rand(ComplexF64, length(blocks[bn]))
-    @time vals, vecs, info = eigsolve(H, vec0, 10, :SR, ishermitian=true);
-    if length(vals) >= 10
-        eigenenergy[:,bn] = real.(vals[1:10])
-    else
-        eigenenergy[1:length(vals),bn] = real.(vals)
-        eigenenergy[1+length(vals):10,bn] = NaN
-    end
-end
-
-using CairoMakie
-begin
-    eigEs = Figure(size = (800,600));
-    ax = Axis(eigEs[1,1],
-        xlabel = "k1+5k2",
-    )
-    for bn in eachindex(blocks)
-        xticknumber = block_k1[bn] + 5block_k2[bn]
-        for j in 1:10
-            if !isnan(eigenenergy[j, bn])
-                scatter!(ax, xticknumber, eigenenergy[j, bn];
-                    color=:black, marker=:hline
-                )
-            end
-        end
-    end
-    #ylims!(-555, -550)
-    eigEs
-end
-begin
-    lowest_E = Figure(size = (800,600));
-    ax_le = Axis(lowest_E[1,1])
-    Emin = vec(eigenenergy[1,:])
-    block_kx = block_k1 .* system.G1[1] + block_k2 .* system.G2[1]
-    block_ky = block_k1 .* system.G1[2] + block_k2 .* system.G2[2]
-    scatter!(ax_le, block_kx, block_ky;
-        color = Emin, markersize = 20
-    )
-    lowest_E
 end
 
 
-#################################################
+#
 
-HK0 = Block_Hamiltonian(blocks[bn0], InteractionList, para)
-ishermitian(HK0)
-@time valsK0, vecsK0, info = eigsolve(HK0, rand(ComplexF64, HK0.cscmatrix.n), 10, :SR, ishermitian=true);
-valsK0
+function one_body_reduced_density_matrix(psi, block_MBSList; cutoff = 1E-7)
 
-
-psi1 = vecsK0[1];
-psi2 = vecsK0[2];
-psi3 = vecsK0[3];
-psi4 = vecsK0[4];
-psi5 = vecsK0[5];
-psi6 = vecsK0[6];
-
-sum(i -> (abs2(psi1[i])>1e-6), eachindex(psi1); init = 0)
-lines(diff(log.(sort(abs2.(psi1))))[end-10000:end])
-
-lines(abs2.(psi1))
-lines(abs2.(psi2))
-lines(abs2.(psi3))
-lines(abs2.(psi4))
-lines(abs2.(psi5))
-lines(abs2.(psi6))
-
-blocks[bn0][7]
-
-function find_index(spin1, spin2, mbs_list = blocks[bn0])
-    index = Int64[]
-    i1 = 7(spin1-1)
-    i2 = 7(spin2-1)+14
-    for i in eachindex(mbs_list)
-        if any(==(i1), mbs_list[i].i) && any(==(i2), mbs_list[i].i)
-            push!(index, i)
-        end
-    end
-    return index
-end
-(maximum(abs2.(psi1)[find_index(1,1)]) * 2^12 +
- maximum(abs2.(psi1)[find_index(1,2)]) * 2^12 +
- maximum(abs2.(psi1)[find_index(2,1)]) * 2^12 +
- maximum(abs2.(psi1)[find_index(2,2)]) * 2^12 ) 
-1
-
-
-
-function one_body_reduced_density_matrix(psi, block_MBSList; para::LLEDPara,
-    cutoff = 1E-7)
-
-    k_num = para.k_num
+    bits = block_MBSList[1].bits
     sorted_state_num_list = getfield.(block_MBSList, :n)
 
-    # DM[i,i′] = <c†_i′ c_i> = <psi | c†_i′ c_i | psi>
-    onebodyRDM = zeros(ComplexF64, 4k_num, 4k_num)
     index_list = findall( x -> x>cutoff, abs2.(psi))
     psi = psi[index_list]
     sorted_state_num_list = sorted_state_num_list[index_list]
-    Threads.@threads for i in 0:4k_num-1
-        for i′ in 0:4k_num-1
+
+    # DM[i,i′] = <c†_i′ c_i> = <psi | c†_i′ c_i | psi>
+    onebodyRDM = zeros(ComplexF64, bits, bits)
+    Threads.@threads for i in 0:bits-1
+        for i′ in 0:bits-1
             if i == i′
                 for index in eachindex(sorted_state_num_list)
                     num = sorted_state_num_list[index]
@@ -747,10 +618,72 @@ function one_body_reduced_density_matrix(psi, block_MBSList; para::LLEDPara,
     end
     return onebodyRDM
 end
+function reduced_density_matrix(psi, block_MBSList, 
+    nA::Vector{Int64}, iA::Vector{Int64}; cutoff = 1E-7)
 
-onebodyRDM = one_body_reduced_density_matrix(vecsK0[4], blocks[bn0]; para=para)
-tr(onebodyRDM)/28
-heatmap(abs.(onebodyRDM), colorrange = (0,1))
-maximum(abs.(onebodyRDM))
-dot(vecsK0[1], vecsK0[4])
+    bits = block_MBSList[1].bits
+    index_list = findall( x -> x>cutoff, abs2.(psi))
+    psi = psi[index_list]
+    num_list = getfield.(block_MBSList[index_list], :n)
+
+    
+    Amask = sum(1 .<< iA; init = 0)
+    Bmask = 1 << bits - 1 - Amask
+    myless_fine(n1, n2) = n1&Bmask < n2&Bmask || n1&Bmask == n2&Bmask && n1<n2
+    myless_coarse(n1, n2) = n1&Bmask < n2&Bmask
+    perm = sortperm(num_list; lt = myless_fine)
+    psi = psi[perm]
+    num_list = num_list[perm]
+    Bchunks_lastindices = Int64[0]
+    let i=0
+        while i < length(num_list)
+            i = searchsortedlast(num_list, num_list[i+1]; lt = myless_coarse)
+            push!(Bchunks_lastindices, i)
+        end
+    end
+
+    NA = length(nA)
+    println(NA)
+    RDM_threads = zeros(ComplexF64, NA, NA, Threads.nthreads())
+    #Threads.@threads 
+    for nchunk in 1:length(Bchunks_lastindices)-1
+        id = Threads.threadid()
+        chunkpiece = Bchunks_lastindices[nchunk]+1:Bchunks_lastindices[nchunk+1]
+        numB = num_list[chunkpiece[1]] & Bmask
+        
+        for i in 1:NA 
+            num = numB + nA[i]
+            index = my_searchsortedfirst(num_list[chunkpiece], num)
+            index == 0 && continue
+
+            RDM_threads[i,i,id] += abs2(psi[chunkpiece[index]])
+
+            for i′ in i+1:NA
+                num′ = numB + nA[i′]
+                index′ = my_searchsortedfirst(num_list[chunkpiece], num′)
+                index′ == 0 && continue
+                rhoii′ = conj(psi[chunkpiece[index′]]) * psi[chunkpiece[index]]
+                RDM_threads[i, i′, id] += rhoii′
+                RDM_threads[i′, i, id] += conj(rhoii′)
+            end
+
+        end
+    end
+    RDM = sum(RDM_threads; dims = 3)[:,:,1]
+    return RDM
+end
+
+function entanglement_entropy(RDM_A::Matrix{ComplexF64}; cutoff = 1E-6)
+    return sum(eigvals(RDM_A)) do x
+        if abs(x) < cutoff
+            return 0.0
+        end
+        -x * log2(x)
+    end
+end
+
+
+
+end
+
 
