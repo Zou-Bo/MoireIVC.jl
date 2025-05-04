@@ -19,7 +19,7 @@ electron number in DC and total small momentum.
 module LLED
 
 export LLEDPara, LLED_init
-export MBS, LLED_mbs_list_twoDiracCone
+export MBS, LLED_mbslist_twoDiracCone
 export LLED_block_bysmallmomentum, LLED_interactionlist
 export LLED_Block_Hamiltonian, LLED_solve
 public reduced_density_matrix, one_body_reduced_density_matrix, entanglement_entropy 
@@ -30,7 +30,7 @@ public reduced_density_matrix, one_body_reduced_density_matrix, entanglement_ent
 using MKL, LinearAlgebra
 using PhysicalUnits
 using Combinatorics
-using SparseArrays, ExtendableSparse, KrylovKit
+using ExtendableSparse, KrylovKit
 using MoireIVC.Basics: laguerrel, ql_cross, my_searchsortedfirst
 using MoireIVC.LLHF: LLHFSysPara, LLHFNumPara
 
@@ -49,14 +49,14 @@ begin
         system::LLHFSysPara
     end
     """
-    parameters of ED calculation
-    Nk×Nk k-mesh where 3|Nk;
-    LL -> Landau level index;
+    parameters of ED calculation:
+    Nk×Nk k-mesh where 3|Nk.
+    LL -> Landau level index.
     k_list[:,k] = [k1; k2] -> "small" momentum = k1/Nk * G1 +  k2/Nk * G2,
-    where k: 1~k_num;
-    Dirac point "large" momentum: kD1 = 1/3 * (G1+G2), kD2 = 2/3 * (G1+G2);
-    mean-field Hamiltonian: Hmf[k,s,s',kD] c†_{k,s,kD} c_{k,s',kD};
-    system::LLHFSysPara contains G1, G2, Gl;
+    where k: 1~k_num.
+    Dirac point "large" momentum: kD1 = 1/3 * (G1+G2), kD2 = 2/3 * (G1+G2).
+    mean-field Hamiltonian: Hmf[k,s,s',kD] c†_{k,s,kD} c_{k,s',kD}.
+    system::LLHFSysPara contains G1, G2, Gl.
     """
     function LLED_init(k_list, Hmf, syspara, N, LL)
         if N%3 !=0
@@ -150,14 +150,14 @@ begin
     4. list incex of the k1=k2=0 block (return 0 if not exist)
     """
     function LLED_block_bysmallmomentum(mbs_list::Vector{MBS};
-        restrict_total_mmt = true, k1range=(-2,2), k2range=(-2,2))
+        momentum_restriction = true, k1range=(-2,2), k2range=(-2,2))
 
         blocks = Vector{MBS}[];
         block_k1 = Int64[];
         block_k2 = Int64[];
         k1min, k1max = extrema(getfield.(mbs_list,:k1))
         k2min, k2max = extrema(getfield.(mbs_list,:k2))
-        if restrict_total_mmt
+        if momentum_restriction
             k1min = max(k1range[1], k1min)
             k2min = max(k2range[1], k2min)
             k1max = min(k1range[2], k1max)
@@ -371,10 +371,10 @@ begin
                     if k1==k2 && kD1 < kD2 || k3==k4 && kD4 < kD3
                         continue
                     end
-                    k1index = k_index[:,k1] + [kD1*NK; kD1*NK]
-                    k2index = k_index[:,k2] + [kD2*NK; kD2*NK]
-                    k3index = k_index[:,k3] + [kD3*NK; kD3*NK]
-                    k4index = k_index[:,k4] + [kD4*NK; kD4*NK]
+                    k1index = k_list[:,k1] + [kD1*NK; kD1*NK]
+                    k2index = k_list[:,k2] + [kD2*NK; kD2*NK]
+                    k3index = k_list[:,k3] + [kD3*NK; kD3*NK]
+                    k4index = k_list[:,k4] + [kD4*NK; kD4*NK]
                     
                     #2.1 same spin
                     for spin in 1:2
@@ -643,10 +643,8 @@ function reduced_density_matrix(psi, block_MBSList,
     end
 
     NA = length(nA)
-    println(NA)
     RDM_threads = zeros(ComplexF64, NA, NA, Threads.nthreads())
-    #Threads.@threads 
-    for nchunk in 1:length(Bchunks_lastindices)-1
+    Threads.@threads for nchunk in 1:length(Bchunks_lastindices)-1
         id = Threads.threadid()
         chunkpiece = Bchunks_lastindices[nchunk]+1:Bchunks_lastindices[nchunk+1]
         numB = num_list[chunkpiece[1]] & Bmask
