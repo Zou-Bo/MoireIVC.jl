@@ -68,6 +68,11 @@ function TDHF_V_matrix_spin(q1, q2, HFpara::LLHFNumPara; Gshell = 2)
             ]
             VFF = Form_factor(LL,LL, (-qg1*G1/N1-qg2*G2/N2)..., s12, sys.l) * 
                 Form_factor(LL,LL, (qg1*G1/N1+qg2*G2/N2)..., s34, sys.l) * V
+            if isnan(HFpara.λ)
+                s12 != s34 && (VFF *= HFpara.α)
+            elseif isnan(HFpara.α)
+                VFF *= HFpara.λ
+            end
             Vspin[(3-s12)÷2, (3-s12)÷2, (3-s34)÷2, (3-s34)÷2,
                 :,:,:,:] .+= VFF .* phase 
         end
@@ -100,6 +105,11 @@ function TDHF_V_matrix_spin(q1, q2, HFpara::LLHFNumPara; Gshell = 2)
                 )
                 VFF = Form_factor(LL,LL, (-qg1*G1/N1-qg2*G2/N2)..., s14, sys.l) * 
                     Form_factor(LL,LL, (qg1*G1/N1+qg2*G2/N2)..., s23, sys.l) * V
+                if isnan(HFpara.λ)
+                    s14 != s23 && (VFF *= HFpara.α)
+                elseif isnan(HFpara.α)
+                    s14 == s23 && (VFF *= HFpara.λ)
+                end
                 Vspin[(3-s14)÷2,(3-s23)÷2,(3-s23)÷2,(3-s14)÷2,
                     1+p1,1+p2,1+k1,1+k2] -= phase * VFF
             end
@@ -125,8 +135,8 @@ function TDHF_matrix(q1, q2, GS::LLTDHFGroundState;
     Vspin = TDHF_Vspin(q1, q2, GS.HFpara))
     N1 = GS.HFpara.N1; N2 = GS.HFpara.N2
     band = GS.band; cov_s2n = GS.eigwf; ctr_s2n = conj(cov_s2n)
+    @inline fld0mod1(x,y) = fldmod1(x,y) .- (1, 0)
     M = zeros(ComplexF64, N1, N2, 2, N1, N2, 2)
-    @inline fld0mod1(x,y) = (fld(x,y), mod1(x,y))
     # ZE
     for k2 in axes(M,2), k1 in axes(M,1)
         M[k1,k2,1,k1,k2,1] += band[2,mod1(k1+q1,N1),mod1(k2+q2,N2)] - band[1,k1,k2]
@@ -136,29 +146,31 @@ function TDHF_matrix(q1, q2, GS::LLTDHFGroundState;
     for (k1, k2) in Iterators.product(1:N1, 1:N2)
         kG1, kq1 = fld0mod1(k1+q1, N1)
         kG2, kq2 = fld0mod1(k2+q2, N2)
-        if kq1 != k1 || kq2 != k2
-            println(kq1, '\t', kq2)
-        end
         k_phase = ql_cross(kG1, kG2, (k1-1)/N1, (k2-1)/N2)
+        println(k1, "\t", k2, "\t", kq1, "\t", kq2, "\t", kG1, "\t", kG2)
         for (p1, p2) in Iterators.product(1:N1, 1:N2)
             pG1, pq1 = fld0mod1(p1-q1, N1)
             pG2, pq2 = fld0mod1(p2-q2, N2)
             p_phase = ql_cross(pG1, pG2, (p1-1)/N1, (p2-1)/N2)
             for (s1,s2,s3,s4) in Iterators.product(1:2,1:2,1:2,1:2)
                 # M[cv,cv]
-                M[p1, p2, 2, k1, k2, 1] += Vspin[s1,s2,s3,s4,p1,p2,k1,k2] *1
+                M[p1, p2, 2, k1, k2, 1] += Vspin[s1,s2,s3,s4,p1,p2,k1,k2] *
                 #ctr_s2n[s1,2,p1,p2]*cov_s2n[s2,1,p1,p2]*ctr_s2n[s3,2,k1,k2]*cov_s2n[s4,1,k1,k2]
+                (s1==2 && s2==1 && s3==2 && s4==1)
                 # M[vc,cv]
                 M[pq1, pq2, 1, k1, k2, 1] += Vspin[s1,s2,s3,s4,p1,p2,k1,k2] *
                 #ctr_s2n[s1,1,p1,p2]*cov_s2n[s2,2,p1,p2]*ctr_s2n[s3,2,k1,k2]*cov_s2n[s4,1,k1,k2] *
+                (s1==1 && s2==2 && s3==2 && s4==1) *
                 cis((s1 != s2) * (3-2s1) * p_phase)
                 # M[cv,vc]
                 M[p1, p2, 2, kq1, kq2, 2] += Vspin[s1,s2,s3,s4,p1,p2,k1,k2] *
                 #ctr_s2n[s1,2,p1,p2]*cov_s2n[s2,1,p1,p2]*ctr_s2n[s3,1,k1,k2]*cov_s2n[s4,2,k1,k2] *
+                (s1==2 && s2==1 && s3==1 && s4==2) *
                 cis((s3 != s4) * (3-2s3) * k_phase)
                 # M[vc,vc]
                 M[pq1, pq2, 1, kq1, kq2, 2] += Vspin[s1,s2,s3,s4,p1,p2,k1,k2] *
                 #ctr_s2n[s1,1,p1,p2]*cov_s2n[s2,2,p1,p2]*ctr_s2n[s3,1,k1,k2]*cov_s2n[s4,2,k1,k2] *
+                (s1==1 && s2==2 && s3==1 && s4==2) *
                 cis((s1 != s2) * (3-2s1) * p_phase + (s3 != s4) * (3-2s3) * k_phase)
             end
         end
@@ -174,7 +186,7 @@ function TDHF_solve(M, n = 4)
     MM = reshape(MM, (N,N))
     vec0 = rand(ComplexF64, N)
     vals, vecs, info = eigsolve(MM, vec0, 2n, EigSorter(abs,rev=false), ishermitian=false);
-    return vals#, vecs
+    return vals[1:2n]#, vecs[1:2n]
     #perm = sortperm(real.(vals))[n+1:2n]
     #return vals[perm], vecs[perm]
 end
@@ -183,14 +195,14 @@ end
 using MoireIVC.LLHF_Plot
 using CairoMakie, PhysicalUnits
 CairoMakie.activate!()
-N1 = 9; N2 = 9
+N1 = 2; N2 = 2
 num_para = LLHF_init_with_lambda(1.0; N1 = N1, N2 = N2, LL = 0);
 LLHF_change_lambda!(num_para, 0.0);
 num_para.H0 .= 0.05 * [num_para.system.W0 * sqrt(27/16) *
     (sin(-2π*k2/N2)+sin(-2π*k1/N1)+sin(2π*(k1/N1+k2/N2)))*(1.5-τn)*(τn′==τn) 
         for k1 in 0:N1-1, k2 in 0:N2-1, τn′ in 1:2, τn in 1:2
 ];
-symmetry = [LLHF.Rot3(0); LLHF.PT(0,:T)]
+symmetry = []#[LLHF.Rot3(0); LLHF.PT(0,:T)]
 ρ = LLHF_solve(num_para; coherence = 0.0, 
     error_tolerance = 1E-10, max_iter_times = 100, 
     post_process_times = 100, post_procession = symmetry,
@@ -208,10 +220,26 @@ GS = TDHF_groundstateanalysis(ρ, num_para);
 q1 = 0
 q2 = 0
 Vspin = TDHF_V_matrix_spin(q1, q2, num_para);
+
 M = TDHF_matrix(q1, q2, GS; Vspin = Vspin);
 M = reshape(M, (2N1*N2, 2N1*N2))
 heatmap(imag.(M))
 maximum(abs2.(M'-M))
-vals, vecs = TDHF_solve(M)
+findmax(abs2.(M'-M))
+eigvals(Hermitian(M))
+
+M[145,145]
+M'[145,145]-M[145,145]
+fldmod1(145, N1)
+fldmod1(17, N2)
+fldmod1(2, 2)
+M = TDHF_matrix(q1, q2, GS; Vspin = Vspin);
+M[1,8,2,1,8,2]
+Vspin[2,1,1,2,1,8,9,3]
+findall(x->abs(x)≈abs(M[1,8,2,1,8,2]), Vspin[2,1,1,2,:,:,:,:])
+
+
+M = TDHF_matrix(q1, q2, GS; Vspin = Vspin);
+vals = TDHF_solve(M)
 
 # end
