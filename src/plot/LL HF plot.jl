@@ -289,7 +289,7 @@ function LLHF_plot_Sz(ρ; para::LLHFNumPara, others...)
 
     theta, phi = polar_azimuthal_angles(ρ, para)
     periodic_hexgon_BZ(cos.(theta); G1 = para.system.G1, G2 = para.system.G2,
-        colormap = :RdBu, colorrange = (0,1), others...
+        colormap = :RdBu, colorrange = (-1,1), others...
     )
 
 end
