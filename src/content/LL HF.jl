@@ -224,6 +224,7 @@ begin
     "change α"
     function LLHF_change_alpha!(num_para, alpha::Float64)
         num_para.λ = NaN
+        num_para.α = alpha
         if alpha != 1.0
             num_para.Hartree = copy(num_para.BareHartree)
             num_para.Hartree[:,:,:,:,1,2] .*= alpha
@@ -237,6 +238,7 @@ begin
     "change λ"
     function LLHF_change_lambda!(num_para, lambda::Float64)
         num_para.α = NaN
+        num_para.λ = lambda
         if lambda != 1.0
             num_para.Hartree = lambda * num_para.BareHartree
             num_para.Fock = copy(num_para.BareFock)
