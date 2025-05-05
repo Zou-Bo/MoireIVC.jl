@@ -8,9 +8,9 @@ export LLHFNumPara, LLHFSysPara
 export LLHF_init_with_alpha, LLHF_init_with_lambda
 export LLHF_change_alpha!, LLHF_change_lambda!
 export LLHF_EnergyPerArea, LLHF_solve
-public polar_azimuthal_angles, berry_curvature, realspace_pauli
-public VP_solution, add_phi!
 public Trans, Rot3, PT
+public VP_solution, add_phi!, band
+public polar_azimuthal_angles, berry_curvature, realspace_pauli
 
 
 
@@ -626,13 +626,12 @@ function berry_curvature(rho, para::LLHFNumPara)
 
     N1 = para.N1
     N2 = para.N2
-    #l = para.l
 
     θ = zeros(Float64, N1+1, N2+1)
     ϕ = zeros(Float64, N1+1, N2+1)
-    filling1_rho = similar(rho)
-    hf_onestep!(filling1_rho, rho; para = para, Hint = hf_interaction(rho, para))
-    local theta, phi = polar_azimuthal_angles(filling1_rho, para)
+    intact_rho = similar(rho)
+    hf_onestep!(intact_rho, rho; para = para, Hint = hf_interaction(rho, para))
+    local theta, phi = polar_azimuthal_angles(intact_rho, para)
     for k1 in 0:N1, k2 in 0:N2
         g1 = Int64(k1==N1)
         g2 = Int64(k2==N2)
