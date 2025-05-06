@@ -1,7 +1,10 @@
 """
 Do Time-dependent Hartree-Fock on LLHF results.
 """
-# module LLTDHF
+module LLTDHF
+
+export LLTDHFGroundState, TDHF_groundstateanalysis
+export TDHF_V_matrix_spin, TDHF_matrix, TDHF_solve
 
 
 using MKL, LinearAlgebra
@@ -29,6 +32,8 @@ function TDHF_groundstateanalysis(ρ, HFpara::LLHFNumPara)
     eigwf = zeros(ComplexF64, 2, 2, N1, N2)
     for k1 in axes(H,1), k2 in axes(H,2)
         band[:,k1,k2], eigwf[:,:,k1,k2] = eigen(Hermitian(H[k1,k2,:,:]) )
+        eigwf[:,1,k1,k2] *= cis(-angle(eigwf[1,1,k1,k2]))
+        eigwf[:,2,k1,k2] *= cis(-angle(eigwf[1,2,k1,k2]))
     end
     return LLTDHFGroundState(HFpara=HFpara, band=band, eigwf=eigwf)
 end
@@ -49,12 +54,15 @@ function TDHF_V_matrix_spin(q1, q2, HFpara::LLHFNumPara; Gshell = 2)
     # Hartree
     g1_shift = div(q1, N1, RoundNearest)
     g2_shift = div(q2, N2, RoundNearest)
-    for g1 in -Gshell:Gshell .-g1_shift, g2 in -Gshell:Gshell .-g2_shift
+    for g1 in -Gshell:Gshell, g2 in -Gshell:Gshell
+        if abs(g1+g2)>Gshell
+            continue
+        end
+        g1 -= g1_shift
+        g2 -= g2_shift
         qg1 = q1 + g1 * N1
         qg2 = q2 + g2 * N2
         if qg1==0 && qg2==0
-            continue
-        elseif abs(g1+g2)>Gshell
             continue
         end
         V = V_int(qg1, qg2; N1=N1, N2=N2, Gl=sys.Gl, D_l=sys.D/sys.l)
@@ -79,29 +87,35 @@ function TDHF_V_matrix_spin(q1, q2, HFpara::LLHFNumPara; Gshell = 2)
     end
 
     # Fock
-    #Threads.@threads 
-    for (p1,p2,k1,k2) in Iterators.product(0:N1-1, 0:N2-1, 0:N1-1, 0:N2-1)
+    # Threads.@threads 
+    for Ipk in CartesianIndices(axes(Vspin)[5:8])
+        p1, p2, k1, k2 = Tuple(Ipk) .- 1
         kpq1 = k1 - p1 + q1
         kpq2 = k2 - p2 + q2
         g1_shift = div(kpq1, N1, RoundNearest)
         g2_shift = div(kpq2, N2, RoundNearest)
-        for g1 in -Gshell:Gshell .-g1_shift, g2 in -Gshell:Gshell .-g2_shift
+        for g1 in -Gshell:Gshell, g2 in -Gshell:Gshell
             if abs(g1+g2)>Gshell
                 continue
             end
+            g1 -= g1_shift
+            g2 -= g2_shift
             qg1 = kpq1 + g1 * N1
             qg2 = kpq2 + g2 * N2
             V = V_int(qg1, qg2; N1=N1, N2=N2, Gl=sys.Gl, D_l=sys.D/sys.l)
 
-            phase_angle = (ql_cross(p1/N1, p2/N2, k1/N1, k2/N2) +
+            phase_angle1 = (ql_cross(p1/N1, p2/N2, k1/N1, k2/N2) +
                 ql_cross((k1+p1)/N1, (k2+p2)/N2, g1, g2)
             )
+            phase_angle2 = ql_cross(q1/N1, q2/N2,  p1/N1-g1,  p2/N2-g2)
+            phase_angle3 = ql_cross(q1/N1, q2/N2, -k1/N1-g1, -k2/N2-g2)
+
 
             for s14 = [1;-1], s23 = [1;-1]
                 phase = cis(
-                    0.5*(s14-s23)*phase_angle +
-                    0.5s23*ql_cross(q1/N1, q2/N2,  p1/N1-g1,  p2/N2-g2) +
-                    0.5s14*ql_cross(q1/N1, q2/N2, -k1/N1-g1, -k2/N2-g2)
+                    0.5*(s14-s23) * phase_angle1 +
+                    0.5s23 * phase_angle2 +
+                    0.5s14 * phase_angle3
                 )
                 VFF = Form_factor(LL,LL, (-qg1*G1/N1-qg2*G2/N2)..., s14, sys.l) * 
                     Form_factor(LL,LL, (qg1*G1/N1+qg2*G2/N2)..., s23, sys.l) * V
@@ -111,11 +125,11 @@ function TDHF_V_matrix_spin(q1, q2, HFpara::LLHFNumPara; Gshell = 2)
                     s14 == s23 && (VFF *= HFpara.λ)
                 end
                 Vspin[(3-s14)÷2,(3-s23)÷2,(3-s23)÷2,(3-s14)÷2,
-                    1+p1,1+p2,1+k1,1+k2] -= phase * VFF
+                    Ipk] -= phase * VFF
             end
         end
     end
-    return Vspin*HFpara.system.W0/HFpara.k_num
+    return Vspin
 end
 
 
@@ -142,35 +156,36 @@ function TDHF_matrix(q1, q2, GS::LLTDHFGroundState;
         M[k1,k2,1,k1,k2,1] += band[2,mod1(k1+q1,N1),mod1(k2+q2,N2)] - band[1,k1,k2]
         M[k1,k2,2,k1,k2,2] += band[2,mod1(k1-q1,N1),mod1(k2-q2,N2)] - band[1,k1,k2]
     end
+    Vspin *= GS.HFpara.system.W0 / GS.HFpara.k_num
     # XV
     for (k1, k2) in Iterators.product(1:N1, 1:N2)
         kG1, kq1 = fld0mod1(k1+q1, N1)
         kG2, kq2 = fld0mod1(k2+q2, N2)
-        k_phase = ql_cross(kG1, kG2, (k1-1)/N1, (k2-1)/N2)
-        println(k1, "\t", k2, "\t", kq1, "\t", kq2, "\t", kG1, "\t", kG2)
+        k_phase = 0.5ql_cross(kG1, kG2, (2(k1-1)+q1)/N1, (2(k2-1)+q2)/N2)
+        #println(k1, "\t", k2, "\t", kq1, "\t", kq2, "\t", kG1, "\t", kG2)
         for (p1, p2) in Iterators.product(1:N1, 1:N2)
             pG1, pq1 = fld0mod1(p1-q1, N1)
             pG2, pq2 = fld0mod1(p2-q2, N2)
-            p_phase = ql_cross(pG1, pG2, (p1-1)/N1, (p2-1)/N2)
+            p_phase = 0.5ql_cross(pG1, pG2, (2(p1-1)-q1)/N1, (2(p2-1)-q2)/N2)
             for (s1,s2,s3,s4) in Iterators.product(1:2,1:2,1:2,1:2)
                 # M[cv,cv]
                 M[p1, p2, 2, k1, k2, 1] += Vspin[s1,s2,s3,s4,p1,p2,k1,k2] *
-                #ctr_s2n[s1,2,p1,p2]*cov_s2n[s2,1,p1,p2]*ctr_s2n[s3,2,k1,k2]*cov_s2n[s4,1,k1,k2]
-                (s1==2 && s2==1 && s3==2 && s4==1)
+                ctr_s2n[s1,2,p1,p2]*cov_s2n[s2,1,p1,p2]*ctr_s2n[s3,2,k1,k2]*cov_s2n[s4,1,k1,k2]
+                #(s1==2 && s2==1 && s3==2 && s4==1)
                 # M[vc,cv]
                 M[pq1, pq2, 1, k1, k2, 1] += Vspin[s1,s2,s3,s4,p1,p2,k1,k2] *
-                #ctr_s2n[s1,1,p1,p2]*cov_s2n[s2,2,p1,p2]*ctr_s2n[s3,2,k1,k2]*cov_s2n[s4,1,k1,k2] *
-                (s1==1 && s2==2 && s3==2 && s4==1) *
+                ctr_s2n[s1,1,pq1,pq2]*cov_s2n[s2,2,pq1,pq2]*ctr_s2n[s3,2,k1,k2]*cov_s2n[s4,1,k1,k2] *
+                #(s1==1 && s2==2 && s3==2 && s4==1) *
                 cis((s1 != s2) * (3-2s1) * p_phase)
                 # M[cv,vc]
                 M[p1, p2, 2, kq1, kq2, 2] += Vspin[s1,s2,s3,s4,p1,p2,k1,k2] *
-                #ctr_s2n[s1,2,p1,p2]*cov_s2n[s2,1,p1,p2]*ctr_s2n[s3,1,k1,k2]*cov_s2n[s4,2,k1,k2] *
-                (s1==2 && s2==1 && s3==1 && s4==2) *
+                ctr_s2n[s1,2,p1,p2]*cov_s2n[s2,1,p1,p2]*ctr_s2n[s3,1,kq1,kq2]*cov_s2n[s4,2,kq1,kq2] *
+                #(s1==2 && s2==1 && s3==1 && s4==2) *
                 cis((s3 != s4) * (3-2s3) * k_phase)
                 # M[vc,vc]
                 M[pq1, pq2, 1, kq1, kq2, 2] += Vspin[s1,s2,s3,s4,p1,p2,k1,k2] *
-                #ctr_s2n[s1,1,p1,p2]*cov_s2n[s2,2,p1,p2]*ctr_s2n[s3,1,k1,k2]*cov_s2n[s4,2,k1,k2] *
-                (s1==1 && s2==2 && s3==1 && s4==2) *
+                ctr_s2n[s1,1,pq1,pq2]*cov_s2n[s2,2,pq1,pq2]*ctr_s2n[s3,1,kq1,kq2]*cov_s2n[s4,2,kq1,kq2] *
+                #(s1==1 && s2==2 && s3==1 && s4==2) *
                 cis((s1 != s2) * (3-2s1) * p_phase + (s3 != s4) * (3-2s3) * k_phase)
             end
         end
@@ -191,55 +206,9 @@ function TDHF_solve(M, n = 4)
     #return vals[perm], vecs[perm]
 end
 
-
-using MoireIVC.LLHF_Plot
-using CairoMakie, PhysicalUnits
-CairoMakie.activate!()
-N1 = 2; N2 = 2
-num_para = LLHF_init_with_lambda(1.0; N1 = N1, N2 = N2, LL = 0);
-LLHF_change_lambda!(num_para, 0.0);
-num_para.H0 .= 0.05 * [num_para.system.W0 * sqrt(27/16) *
-    (sin(-2π*k2/N2)+sin(-2π*k1/N1)+sin(2π*(k1/N1+k2/N2)))*(1.5-τn)*(τn′==τn) 
-        for k1 in 0:N1-1, k2 in 0:N2-1, τn′ in 1:2, τn in 1:2
-];
-symmetry = []#[LLHF.Rot3(0); LLHF.PT(0,:T)]
-ρ = LLHF_solve(num_para; coherence = 0.0, 
-    error_tolerance = 1E-10, max_iter_times = 100, 
-    post_process_times = 100, post_procession = symmetry,
-    complusive_mixing=false, complusive_mixing_rate=0.5, 
-    stepwise_output = true, final_output = true
-);
-LLHF_plot_band_3D(ρ; para=num_para)
-LLHF_plot_band(ρ; para=num_para)
-LLHF_plot_phase(ρ; para=num_para)
-LLHF_plot_Sz(ρ; para=num_para)
-LLHF_plot_Berrycurvature(ρ; para=num_para)
-
-#num_para.system.W0/num_para.k_num
-GS = TDHF_groundstateanalysis(ρ, num_para);
-q1 = 0
-q2 = 0
-Vspin = TDHF_V_matrix_spin(q1, q2, num_para);
-
-M = TDHF_matrix(q1, q2, GS; Vspin = Vspin);
-M = reshape(M, (2N1*N2, 2N1*N2))
-heatmap(imag.(M))
-maximum(abs2.(M'-M))
-findmax(abs2.(M'-M))
-eigvals(Hermitian(M))
-
-M[145,145]
-M'[145,145]-M[145,145]
-fldmod1(145, N1)
-fldmod1(17, N2)
-fldmod1(2, 2)
-M = TDHF_matrix(q1, q2, GS; Vspin = Vspin);
-M[1,8,2,1,8,2]
-Vspin[2,1,1,2,1,8,9,3]
-findall(x->abs(x)≈abs(M[1,8,2,1,8,2]), Vspin[2,1,1,2,:,:,:,:])
+end
 
 
-M = TDHF_matrix(q1, q2, GS; Vspin = Vspin);
-vals = TDHF_solve(M)
+
 
 # end
