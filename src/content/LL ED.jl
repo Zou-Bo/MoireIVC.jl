@@ -18,8 +18,8 @@ electron number in DC and total small momentum.
 """
 module LLED
 
-export LLEDPara, LLED_init
-export MBS, LLED_mbslist_twoDiracCone
+public LLEDPara, MBS
+export LLED_init, LLED_mbslist_twoDiracCone
 export LLED_block_bysmallmomentum, LLED_interactionlist
 export LLED_Block_Hamiltonian, LLED_solve
 public reduced_density_matrix, one_body_reduced_density_matrix, entanglement_entropy 

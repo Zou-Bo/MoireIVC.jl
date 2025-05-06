@@ -3,14 +3,15 @@ Do Time-dependent Hartree-Fock on LLHF results.
 """
 module LLTDHF
 
-export LLTDHFGroundState, TDHF_groundstateanalysis
+public LLTDHFGroundState
+export TDHF_groundstateanalysis
 export TDHF_V_matrix_spin, TDHF_matrix, TDHF_solve
 
 
 using MKL, LinearAlgebra
 using TensorOperations, KrylovKit
 using MoireIVC.LLHF
-using MoireIVC.LLHF: hf_interaction, Form_factor, V_int
+using MoireIVC.LLHF: LLHFNumPara, Form_factor, V_int
 using MoireIVC.Basics: ql_cross
 # using PhysicalUnits
 
@@ -26,7 +27,7 @@ covariant c†_n = <s|n> c†_s = eigwf[s,n] c†_s
 contravariant c_n = <n|s> c_s = conj(eigwf[s,n]) c_s
 """
 function TDHF_groundstateanalysis(ρ, HFpara::LLHFNumPara)
-    H = hf_interaction(ρ, HFpara) + HFpara.H0
+    H = LLHF.hf_interaction(ρ, HFpara) + HFpara.H0
     N1 = HFpara.N1; N2 = HFpara.N2
     band = zeros(Float64, 2, N1, N2)
     eigwf = zeros(ComplexF64, 2, 2, N1, N2)

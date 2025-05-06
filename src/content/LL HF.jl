@@ -4,12 +4,12 @@ Two LLs are from two valleys with quasibloch repres in hexagonal BZ
 """
 module LLHF
 
-export LLHFNumPara, LLHFSysPara
+public LLHFNumPara, LLHFSysPara
 export LLHF_init_with_alpha, LLHF_init_with_lambda
 export LLHF_change_alpha!, LLHF_change_lambda!
 export LLHF_EnergyPerArea, LLHF_solve
 public Trans, Rot3, PT
-public VP_solution, add_phi!, band
+public VP_solution, H0_C3_T!, H0_P!, add_phi!, band
 public polar_azimuthal_angles, berry_curvature, realspace_pauli
 
 
@@ -49,11 +49,10 @@ begin
         # material constants
         e::Float64 = ElementaryCharge
         m_e::Float64 = ElectronMass * 0.4
-        ϵ::Float64 = 5.0
-        a_mono::Float64 = 0.352nm #MoTe2
+        ϵ::Float64
         # geometry parameters
-        twist_θ::Float64      # in degree
-        a_Moire::Float64 = a_mono / 2.0 / sind(twist_θ / 2.0)
+        a_Moire::Float64
+        sinθ::Float64 = sqrt(0.75)
         Area_uc::Float64 = sqrt(0.75) * a_Moire^2
         D::Float64 # gate distance for screening
         # effective B field
@@ -72,11 +71,12 @@ begin
         γ2::ComplexF64 = _γ2(a1, a2)
         WF_nmlz::Float64 = WF_normalizer(a1, a2, l, γ2)
     end
-    "twist angle θ in degree, gate screening"
-    define_system(θ::Float64 = 2.1, D::Float64 = 20nm) = LLHFSysPara(
-        twist_θ = θ,
-        D = D,
-    )
+    "twist angle θ in degree, gate screening, triangular lattice"
+    function define_MoTe2system(twist_θ::Float64 = 2.1, D::Float64 = 20nm;
+        ϵ = 5.0, a_mono = 0.352nm)
+        a_Moire = a_mono / 2.0 / sind(twist_θ / 2.0)
+        return LLHFSysPara(ϵ = ϵ, a_Moire = a_Moire, D = D, )
+    end
     function wavefunction(r1, r2, k1, k2, n::Int64=0; sys_para::LLHFSysPara)
 
         return wavefunction0(r1, r2, k1, k2, n; 
@@ -212,12 +212,12 @@ begin
 
     end
     "initializa the numerical calculation using α"
-    function LLHF_init_with_alpha(alpha::Float64, sys_para::LLHFSysPara = define_system(); others...)
+    function LLHF_init_with_alpha(alpha::Float64, sys_para::LLHFSysPara = define_MoTe2system(); others...)
         num_para = LLHFNumPara(; system = sys_para, others...)
         return LLHF_change_alpha!(num_para, alpha)
     end
     "initializa the numerical calculation using λ"
-    function LLHF_init_with_lambda(lambda::Float64, sys_para::LLHFSysPara = define_system(); others...)
+    function LLHF_init_with_lambda(lambda::Float64, sys_para::LLHFSysPara = define_MoTe2system(); others...)
         num_para = LLHFNumPara(; system = sys_para, others...)
         return LLHF_change_lambda!(num_para, lambda)
     end
@@ -252,6 +252,22 @@ begin
         DM = zeros(ComplexF64, size(num_para.DMseed))
         DM[:,:,τ,τ] .= 1.0
         return DM
+    end
+    "sinoal H0 with C3 symmetry that opens a gap in unit of W0"
+    function H0_C3_T!(num_para, gap=0.1)
+        num_para.H0 .= gap * [num_para.system.W0 * sqrt(27/16) *
+            (sin(-2π*k2/num_para.N2)+sin(-2π*k1/num_para.N1)+sin(2π*(k1/num_para.N1+k2/num_para.N2)))*
+            (1.5-τn)*(τn′==τn) 
+                for k1 in 0:num_para.N1-1, k2 in 0:num_para.N2-1, τn′ in 1:2, τn in 1:2
+        ];
+        return num_para
+    end
+    "constant H0 that opens a gap in unit of W0"
+    function H0_P!(num_para, gap=0.1)
+        num_para.H0 .= gap * [num_para.system.W0*(1.5-τn)*(τn′==τn) 
+            for k1 in 0:num_para.N1-1, k2 in 0:num_para.N2-1, τn′ in 1:2, τn in 1:2
+        ];
+        return num_para
     end
 end
 
