@@ -255,7 +255,7 @@ begin
     end
     "sinoal H0 with C3 symmetry that opens a gap in unit of W0"
     function H0_C3_T!(num_para, gap=0.1)
-        num_para.H0 .= gap * [num_para.system.W0 * sqrt(27/16) *
+        num_para.H0 .= gap * [num_para.system.W0 * sqrt(4/27) *
             (sin(-2π*k2/num_para.N2)+sin(-2π*k1/num_para.N1)+sin(2π*(k1/num_para.N1+k2/num_para.N2)))*
             (1.5-τn)*(τn′==τn) 
                 for k1 in 0:num_para.N1-1, k2 in 0:num_para.N2-1, τn′ in 1:2, τn in 1:2
