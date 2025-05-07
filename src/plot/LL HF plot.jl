@@ -11,9 +11,13 @@ using MoireIVC.LLHF: polar_azimuthal_angles, berry_curvature, realspace_pauli
 using MoireIVC.Basics: ql_cross
 import MoireIVC.phase_color
 
-export LLHF_plot_band_3D, LLHF_plot_band, LLHF_plot_realspace
-export LLHF_plot_phase, LLHF_plot_Sz, LLHF_plot_Berrycurvature
-
+export LLHF_plot_band_3D
+export LLHF_plot_band!, LLHF_plot_band
+public LLHF_plot_realspace_data
+export LLHF_plot_realspace!, LLHF_plot_realspace
+export LLHF_plot_phase!, LLHF_plot_phase
+export LLHF_plot_Sz!, LLHF_plot_Sz
+export LLHF_plot_Berrycurvature!, LLHF_plot_Berrycurvature
 
 
 
@@ -52,7 +56,7 @@ function LLHF_plot_band_3D(rho; para::LLHFNumPara, unit=:W0)
     display(fig)
     CairoMakie.activate!()
 end
-function LLHF_plot_band(rho; para::LLHFNumPara, unit=:W0)
+function LLHF_plot_band!(ax, rho; para::LLHFNumPara, unit=:W0, color=:blue, others...)
 
     N1 = para.N1; N2 = para.N2
     N1 != N2 && error("LLHF_plot_band only works with N1=N2")
@@ -70,6 +74,16 @@ function LLHF_plot_band(rho; para::LLHFNumPara, unit=:W0)
     b2 = [b2; bands[1:N1÷2+1,1,2]./u]
 
 
+
+    lines!(ax, 0:N1+N1÷2, b1, color=color, others...)
+    lines!(ax, 0:N1+N1÷2, b2, color=color, others...)
+
+end
+function LLHF_plot_band(rho; para::LLHFNumPara, unit=:W0)
+
+    N1 = para.N1; N2 = para.N2
+    N1 != N2 && error("LLHF_plot_band only works with N1=N2")
+
     fig = Figure(size=(500,400))
     ax = Axis(fig[1,1],
         xticks=([0,N1/3,2N1/3,N1,N1+N1÷2], ["γ", "κ", "κ'", "γ", "m"]), 
@@ -78,29 +92,63 @@ function LLHF_plot_band(rho; para::LLHFNumPara, unit=:W0)
         ylabel="E (" * String(unit) * ")",
         limits=((0,N1+N1÷2), nothing)
     )
-    lines!(ax, 0:N1+N1÷2, b1, color=:blue)
-    lines!(ax, 0:N1+N1÷2, b2, color=:blue)
+    LLHF_plot_band!(ax, rho; para=para, unit=unit)
 
     display(fig)
 
 end
 
 
+function LLHF_plot_realspace_data(ρ; para::LLHFNumPara,
+    N = 36, xlimits = (-1.2, 1.2), ylimits = (-1.2, 1.2))
+    
+    a = para.system.a_Moire
+    N = (N ÷ 3) * 3
+    dx = 1. / N
+    dy = sqrt(3) * dx
+    
+    x1_range = [reverse(collect(-dx:-dx:xlimits[1])); collect(0.0:dx:xlimits[2])]
+    x2_range = [reverse(collect(-dx/2.0:-dx:xlimits[1])); collect(dx/2.0:dx:xlimits[2])]
+    y1_range = [reverse(collect(-dy:-dy:ylimits[1])); collect(0.0:dy:ylimits[2])]
+    y2_range = [reverse(collect(-dy/2.0:-dy:ylimits[1])); collect(dy/2.0:dy:ylimits[2])]
 
+    plot_x = Vector{Float64}(undef,length(x1_range)*length(y1_range)+length(x2_range)*length(y2_range))
+    plot_y = similar(plot_x)
+    plot_Sx = similar(plot_x)
+    plot_Sy = similar(plot_x)
+    plot_Sz = similar(plot_x)
+    plot_n  = similar(plot_x)
 
-function LLHF_plot_realspace(ρ; para::LLHFNumPara,
+    index = 1
+    for (i, j) in Iterators.product(eachindex(x1_range), eachindex(y1_range))
+        plot_x[index] = x1_range[i]
+        plot_y[index] = y1_range[j]
+        index += 1
+    end
+    for (i, j) in Iterators.product(eachindex(x2_range), eachindex(y2_range))
+        plot_x[index] = x2_range[i]
+        plot_y[index] = y2_range[j]
+        index += 1
+    end
+    Threads.@threads for index in eachindex(plot_x)
+        plot_Sx[index], plot_Sy[index], plot_Sz[index], plot_n[index] = 
+        realspace_pauli(plot_x[index]*a, plot_y[index]*a, ρ, para)
+    end
+    return (plot_Sx, plot_Sy, plot_Sz, plot_n)
+end
+function LLHF_plot_realspace!(ax, ρ; para::LLHFNumPara,
     N = 36, xlimits = (-1.2, 1.2), ylimits = (-1.2, 1.2), 
-    arrowscale = 1, arrowsize = 4, 
-    colormap = :berlin, colorrange = nothing,
-    colorbar = true, text = true, textsize = 20,
-    text_position=([0.0; 1.1], [0.0; 1.0], [0.0, 0.9]),
+    arrowscale = 1, arrowsize = 4, arrowcolor = :Sz,
+    colormap = Reverse(:berlin), colorrange = nothing,
+    text = true, textsize = 20,
+    text_position=([0.0; 1.1], [0.0; 1.0], [0.0, 0.9], [0.0,0.8]),
+    inputdata = nothing, others...
     )
 
     a = para.system.a_Moire
     a1 = para.system.a1
     a2 = para.system.a2
 
-    fig = Figure(size = (780,700));
 
     N = (N ÷ 3) * 3
     dx = 1. / N
@@ -114,42 +162,54 @@ function LLHF_plot_realspace(ρ; para::LLHFNumPara,
 
     plot_x = Vector{Float64}(undef,length(x1_range)*length(y1_range)+length(x2_range)*length(y2_range))
     plot_y = similar(plot_x)
-    plot_Sx= similar(plot_x)
-    plot_Sy= similar(plot_x)
-    plot_Sz= similar(plot_x)
-    index::Int64 = 1
+    plot_Sx = similar(plot_x)
+    plot_Sy = similar(plot_x)
+    plot_Sz = similar(plot_x)
+    plot_n  = similar(plot_x)
+    index = 1
     for (i, j) in Iterators.product(eachindex(x1_range), eachindex(y1_range))
-        x = x1_range[i]
-        y = y1_range[j]
-        plot_x[index] = x
-        plot_y[index] = y
-        plot_Sx[index], plot_Sy[index], plot_Sz[index] = realspace_pauli(x*a, y*a, ρ, para)[[1,2,3]]
+        plot_x[index] = x1_range[i]
+        plot_y[index] = y1_range[j]
         index += 1
     end
     for (i, j) in Iterators.product(eachindex(x2_range), eachindex(y2_range))
-        x = x2_range[i]
-        y = y2_range[j]
-        plot_x[index] = x
-        plot_y[index] = y
-        plot_Sx[index], plot_Sy[index], plot_Sz[index] = realspace_pauli(x*a, y*a, ρ, para)[[1,2,3]]
+        plot_x[index] = x2_range[i]
+        plot_y[index] = y2_range[j]
         index += 1
     end
-
-    ax = Axis(fig[1,1], aspect = 1.0, 
-        xticksvisible = true, yticksvisible = true,
-        xgridvisible = true, ygridvisible = true,
-        xticklabelsvisible = true, yticklabelsvisible = true, 
-    )
-    if isnothing(colorrange)
-        colorrange = (minimum(plot_Sz)-0.01, maximum(plot_Sz)+0.01)
+    if (!isnothing(inputdata) &&
+        length(inputdata[1]) == length(plot_Sx) &&
+        length(inputdata[2]) == length(plot_Sy) &&
+        length(inputdata[3]) == length(plot_Sz) &&
+        length(inputdata[4]) == length(plot_n )    )
+        plot_Sx .= inputdata[1]
+        plot_Sy .= inputdata[2]
+        plot_Sz .= inputdata[3]
+        plot_n  .= inputdata[4]
+    else
+        Threads.@threads for index in eachindex(plot_x)
+            plot_Sx[index], plot_Sy[index], plot_Sz[index], plot_n[index] = 
+            realspace_pauli(plot_x[index]*a, plot_y[index]*a, ρ, para)
+        end
     end
-    ar = arrows!(ax, plot_x, plot_y, plot_Sx, plot_Sy, 
-        color = plot_Sz, colorrange = colorrange, colormap = colormap,
-        arrowsize = arrowsize, lengthscale = scale,
+
+    if arrowcolor == :Sz
+        plot_color = plot_Sz
+    elseif arrowcolor == :n
+        plot_color = plot_n
+    else
+        error("color of arrows can only be :Sz or :n")
+    end
+
+    if isnothing(colorrange)
+        colorrange = (minimum(plot_color)-0.01, maximum(plot_color)+0.01)
+    end
+    ar = arrows!(ax, plot_x, plot_y, plot_Sx, plot_Sy;
+        color = plot_color, colorrange = colorrange, colormap = colormap,
+        arrowsize = arrowsize, lengthscale = scale, others...
     )
     xlims!(ax, xlimits...)
     ylims!(ax, ylimits...)
-    colorbar && Colorbar(fig[1,2], ar)
 
     primitive_cell = zeros(Float64, 2, 5)
     primitive_cell[:,1] = -0.5a1 - 0.5a2
@@ -174,7 +234,36 @@ function LLHF_plot_realspace(ρ; para::LLHFNumPara,
         text!(ax, text_position[3]...; fontsize = textsize,
             text = (@sprintf "Sz: %.4f ~ %.4f" minimum(plot_Sz) maximum(plot_Sz))
         )
+        text!(ax, text_position[4]...; fontsize = textsize,
+            text = (@sprintf "n: %.4f ~ %.4f" minimum(plot_Sz) maximum(plot_Sz))
+        )
     end
+
+    ar
+end
+function LLHF_plot_realspace(ρ; para::LLHFNumPara,
+    N = 36, xlimits = (-1.2, 1.2), ylimits = (-1.2, 1.2), 
+    arrowscale = 1, arrowsize = 4, arrowcolor = :Sz,
+    colormap = Reverse(:berlin), colorrange = nothing,
+    colorbar = true, text = true, textsize = 20,
+    text_position=([0.0; 1.1], [0.0; 1.0], [0.0, 0.9], [0.0,0.8]),
+    )
+
+    fig = Figure(size = (780,700));
+    ax = Axis(fig[1,1], aspect = 1.0, 
+        xticksvisible = true, yticksvisible = true,
+        xgridvisible = true, ygridvisible = true,
+        xticklabelsvisible = true, yticklabelsvisible = true, 
+    )
+    ar = LLHF_plot_realspace!(ax, ρ; 
+        para = para, arrowcolor = arrowcolor,
+        N = N, xlimits = xlimits, ylimits = ylimits,
+        arrowscale = arrowscale, arrowsize = arrowsize, 
+        colormap = colormap, colorrange = colorrange,
+        text = text, textsize = textsize, 
+        text_position = text_position
+    )
+    colorbar && Colorbar(fig[1,2], ar)
     fig
 end
 
@@ -182,7 +271,7 @@ end
 
 
 function hexgon_heatmap!(ax, range1, range2, colormatrix;
-    period1, period2, # G1, G2 
+    period1, period2, # in most cases they are just G1, G2 
     colorrange=(minimum(colormatrix)-0.01, maximum(colormatrix)+0.01), colormap=:viridis, 
     hexgonsize = abs(range1[2]-range1[1])/sqrt(3), 
     hexgonrotate = angle(period1[1]+period1[2]*im), 
@@ -200,9 +289,9 @@ function hexgon_heatmap!(ax, range1, range2, colormatrix;
         colormap = colormap, colorrange = colorrange, others...
     )
 end
-function periodic_hexgon_BZ(matrix; G1, G2, mid_mesh=false, 
+function periodic_hexgon_BZ!(ax, matrix; G1, G2, mid_mesh=false, 
     colorrange=(minimum(matrix)-0.01, maximum(matrix)+0.01),
-    colormap=:viridis, ticks=Makie.automatic, others...
+    colormap=:viridis, linecolor = :white, others...
     )
 
     N1, N2 = size(matrix)
@@ -210,7 +299,6 @@ function periodic_hexgon_BZ(matrix; G1, G2, mid_mesh=false,
     k1range = floor(Int64,-1.2N1):floor(Int64,1.2N1)
     k2range = floor(Int64,-0.9N2):floor(Int64,0.9N2)
 
-    fig = Figure(size=(600,500));
     data = [ matrix[1+k1-floor(Int64,k1//N1)*N1, 1+k2-floor(Int64,k2//N2)*N2]
         for k1 in k1range, k2 in k2range
     ]
@@ -220,30 +308,25 @@ function periodic_hexgon_BZ(matrix; G1, G2, mid_mesh=false,
         k2range = k2range .+ 0.5
     end
 
-    ax = Axis(fig[1,1], aspect = DataAspect())
     hm = hexgon_heatmap!(ax, k1range./N1, k2range./N2, data;
         period1 = G1, period2 = G2,
         colormap = colormap, colorrange = colorrange, others...
     )
-    Colorbar(fig[1,2], hm, ticks=ticks)
+
 
     BZpoints = [Point2f([cospi(1/3) -sinpi(1/3); sinpi(1/3) cospi(1/3)]^n * (G1+G2)/3.0)
         for n = 0:6
     ]
-    lines!(ax, BZpoints; color=:white)
+    lines!(ax, BZpoints; color = linecolor)
 
     L = 0.7norm(G1)
-    ylims!(-L,L)
-    xlims!(-L,L)
+    ylims!(ax, -L, L)
+    xlims!(ax, -L, L)
 
-    display(fig)
-
-
-
+    hm
 end
 
-
-function LLHF_plot_phase(ρ; para::LLHFNumPara, others...)
+function LLHF_plot_phase!(ax, ρ; para::LLHFNumPara, others...)
 
     N1 = para.N1; N2 = para.N2
     G1 = para.system.G1; G2 = para.system.G2
@@ -251,7 +334,7 @@ function LLHF_plot_phase(ρ; para::LLHFNumPara, others...)
     k1range = floor(Int64,-1.2N1):floor(Int64,1.2N1)
     k2range = floor(Int64,-0.9N2):floor(Int64,0.9N2)
 
-    fig = Figure(size=(600,500));
+
     al = [ angle(ρ[1+k1-floor(Int64,k1//N1)*N1, 1+k2-floor(Int64,k2//N2)*N2,2,1])
         for k1 in k1range, k2 in k2range
     ]
@@ -265,14 +348,12 @@ function LLHF_plot_phase(ρ; para::LLHFNumPara, others...)
             al[I] -= 2π
         end
     end
-    ax = Axis(fig[1,1], aspect = DataAspect())
+
     hexgon_heatmap!(ax, k1range./N1, k2range./N2, al;
         period1 = G1, period2 = G2,
         colormap = phase_color, colorrange = (-pi,pi), others...
     )
-    Colorbar(fig[1,2], colormap = phase_color, colorrange = (-pi,pi),
-        ticks = (-pi:0.5pi:pi, ["-π","-π/2","0","π/2","π"])
-    )
+
 
     BZpoints = [Point2f([cospi(1/3) -sinpi(1/3); sinpi(1/3) cospi(1/3)]^n * (G1+G2)/3.0)
         for n = 0:6
@@ -280,30 +361,72 @@ function LLHF_plot_phase(ρ; para::LLHFNumPara, others...)
     lines!(ax, BZpoints; color=:white)
 
     L = 0.7norm(G1)
-    ylims!(-L,L)
-    xlims!(-L,L)
+    ylims!(ax, -L, L)
+    xlims!(ax, -L, L)
+
+end
+function LLHF_plot_phase(ρ; para::LLHFNumPara, others...)
+
+    fig = Figure(size=(600,500));
+    ax = Axis(fig[1,1], aspect = DataAspect())
+    LLHF_plot_phase!(ax, ρ; para=para)
+    Colorbar(fig[1,2], colormap = phase_color, colorrange = (-pi,pi),
+        ticks = (-pi:0.5pi:pi, ["-π","-π/2","0","π/2","π"])
+    )
 
     display(fig)
 end
-function LLHF_plot_Sz(ρ; para::LLHFNumPara, others...)
+function LLHF_plot_Sz!(ax, ρ; para::LLHFNumPara,
+    colormap = :RdBu, colorrange = (-1,1),
+    others...)
 
     theta, phi = polar_azimuthal_angles(ρ, para)
-    periodic_hexgon_BZ(cos.(theta); G1 = para.system.G1, G2 = para.system.G2,
-        colormap = :RdBu, colorrange = (-1,1), others...
+    hm = periodic_hexgon_BZ!(ax, cos.(theta); G1 = para.system.G1, G2 = para.system.G2,
+        colormap = colormap, colorrange = colorrange, others...
     )
+    hm
+end
+function LLHF_plot_Sz(ρ; para::LLHFNumPara, 
+    colormap = :RdBu, colorrange = (-1,1),
+    others...)
+
+
+    fig = Figure(size=(600,500));
+    ax = Axis(fig[1,1], aspect = DataAspect())
+    hm = LLHF_plot_Sz!(ax, ρ; para=para, 
+        colormap = colormap, colorrange = colorrange,
+        mid_mesh = false, others...
+    )
+    Colorbar(fig[1,2], hm)
+    display(fig)
 
 end
-function LLHF_plot_Berrycurvature(ρ; para::LLHFNumPara, others...)
+function LLHF_plot_Berrycurvature!(ax, ρ; para::LLHFNumPara, colormap = :RdBu,
+    others...)
+
+    BerryCurvature = berry_curvature(ρ, para)
+    k_num = para.k_num
+    hm = periodic_hexgon_BZ!(ax, BerryCurvature*k_num; G1 = para.system.G1, G2 = para.system.G2,
+        colormap = colormap, mid_mesh = true, others...
+    )
+    hm
+end
+function LLHF_plot_Berrycurvature(ρ; para::LLHFNumPara, colormap = :RdBu,
+    others...)
 
     BerryCurvature = berry_curvature(ρ, para)
     @show ChernNumber = sum(BerryCurvature)
-    periodic_hexgon_BZ(BerryCurvature*2π; G1 = para.system.G1, G2 = para.system.G2,
-        colormap = :RdBu, mid_mesh = true, others...
+    k_num = para.k_num
+
+    fig = Figure(size=(600,500));
+    ax = Axis(fig[1,1], aspect = DataAspect())
+    hm = periodic_hexgon_BZ!(ax, BerryCurvature*k_num; G1 = para.system.G1, G2 = para.system.G2,
+        colormap = colormap, mid_mesh = true, others...
     )
+    Colorbar(fig[1,2], hm)
 
-
+    display(fig)
 end
-
 
 
 
