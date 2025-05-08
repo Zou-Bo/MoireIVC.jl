@@ -477,6 +477,11 @@ module CrystalSym
                 rho[1+k1,1+k2,2,2] = (rho[1+k1,1+k2,2,2] + rho[1+Mk1,1+Mk2,2,2] )/2.
                 rho[1+Mk1,1+Mk2,1,1] = rho[1+k1,1+k2,1,1]
                 rho[1+Mk1,1+Mk2,2,2] = rho[1+k1,1+k2,2,2]
+            elseif Inv.sym == :PT
+                rho[1+k1,1+k2,1,1] = 0.5
+                rho[1+k1,1+k2,2,2] = 0.5
+                rho[1+Mk1,1+Mk2,1,1] = 0.5
+                rho[1+Mk1,1+Mk2,2,2] = 0.5
             end
 
         end
