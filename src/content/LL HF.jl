@@ -212,17 +212,17 @@ begin
 
     end
     "initializa the numerical calculation using α"
-    function LLHF_init_with_alpha(alpha::Float64, sys_para::LLHFSysPara = define_MoTe2system(); others...)
+    function LLHF_init_with_alpha(alpha::Real, sys_para::LLHFSysPara = define_MoTe2system(); others...)
         num_para = LLHFNumPara(; system = sys_para, others...)
         return LLHF_change_alpha!(num_para, alpha)
     end
     "initializa the numerical calculation using λ"
-    function LLHF_init_with_lambda(lambda::Float64, sys_para::LLHFSysPara = define_MoTe2system(); others...)
+    function LLHF_init_with_lambda(lambda::Real, sys_para::LLHFSysPara = define_MoTe2system(); others...)
         num_para = LLHFNumPara(; system = sys_para, others...)
         return LLHF_change_lambda!(num_para, lambda)
     end
     "change α"
-    function LLHF_change_alpha!(num_para, alpha::Float64)
+    function LLHF_change_alpha!(num_para, alpha::Real)
         num_para.λ = NaN
         num_para.α = alpha
         if alpha != 1.0
@@ -232,11 +232,14 @@ begin
             num_para.Fock = copy(num_para.BareFock)
             num_para.Fock[:,:,:,:,1,2] .*= alpha
             num_para.Fock[:,:,:,:,2,1] .*= alpha
+        else
+            num_para.Hartree = num_para.BareHartree
+            num_para.Fock = num_para.BareFock
         end
         return num_para
     end
     "change λ"
-    function LLHF_change_lambda!(num_para, lambda::Float64)
+    function LLHF_change_lambda!(num_para, lambda::Real)
         num_para.α = NaN
         num_para.λ = lambda
         if lambda != 1.0
@@ -244,6 +247,9 @@ begin
             num_para.Fock = copy(num_para.BareFock)
             num_para.Fock[:,:,:,:,1,1] .*= lambda
             num_para.Fock[:,:,:,:,2,2] .*= lambda
+        else
+            num_para.Hartree = num_para.BareHartree
+            num_para.Fock = num_para.BareFock
         end
         return num_para
     end
