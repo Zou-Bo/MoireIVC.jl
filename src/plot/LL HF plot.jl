@@ -275,7 +275,7 @@ function hexgon_heatmap!(ax, range1, range2, colormatrix;
     colorrange=(minimum(colormatrix)-0.01, maximum(colormatrix)+0.01), colormap=:viridis, 
     hexgonsize = abs(range1[2]-range1[1])/sqrt(3), 
     hexgonrotate = angle(period1[1]+period1[2]*im), 
-    hexgon_expension = 0.02, others...
+    hexgon_expension = 0.04, others...
     )
 
     hexgon_edge = hexgonsize * sqrt(abs2(period1[1])+abs2(period1[2]))
