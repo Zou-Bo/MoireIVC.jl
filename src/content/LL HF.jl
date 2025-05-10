@@ -436,8 +436,9 @@ module CrystalSym
     
     struct PT 
         n::Int64
-        sym::Symbol = :none
+        sym::Symbol
     end
+    PT(n::Int64) = PT(n, :none)
     function (Inv::PT)(rho)
 
         N1 = size(rho, 1)
