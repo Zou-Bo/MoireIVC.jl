@@ -436,7 +436,7 @@ module CrystalSym
     
     struct PT 
         n::Int64
-        sym::Symbol
+        sym::Symbol = :none
     end
     function (Inv::PT)(rho)
 
@@ -482,6 +482,8 @@ module CrystalSym
                 rho[1+k1,1+k2,2,2] = 0.5
                 rho[1+Mk1,1+Mk2,1,1] = 0.5
                 rho[1+Mk1,1+Mk2,2,2] = 0.5
+            else
+                # not to do anything for other markers
             end
 
         end
@@ -595,11 +597,11 @@ function hf_converge!(ρ;
 
 
         if error <= error_tolerance
-            final_output && println("converged in $i iterations")
+            final_output && println("converged in $i iterations, density error = $error")
             break
         end
         if i == max_iter_times
-            final_output && println("not converged after $max_iter_times iterations, error = $error.")
+            final_output && println("not converged after $max_iter_times iterations, density error = $error.")
         end
     end
 
