@@ -52,21 +52,23 @@ begin
         ϵ::Float64
         # geometry parameters
         a_Moire::Float64
+        ratio12::Float64 = 1.0
+        cosθ::Float64 = 0.5  # angle between G1 and G2
         sinθ::Float64 = sqrt(0.75)
-        Area_uc::Float64 = sqrt(0.75) * a_Moire^2
-        D::Float64 # gate distance for screening
+        Area_uc::Float64 = sinθ * a_Moire^2 /ratio12
+        D::Float64             # gate distance for screening
         # effective B field
         l::Float64 = sqrt(Area_uc / (2π))
         B::Float64 = 1.0 / (e * l^2)
         ω_c::Float64 = e*B/m_e
         W0::Float64 = e^2/ϵ/l
         # real and reciprocal lattice vectors
-        a1::Vector{Float64} = [ sqrt(0.75); -0.5] * a_Moire
-        a2::Vector{Float64} = [ 0.; 1.] * a_Moire
-        G_Moire::Float64 = 2π / a_Moire / sqrt(0.75)
-        Gl::Float64 = G_Moire * l
-        G1::Vector{Float64} = [ 1.; 0.] * G_Moire
-        G2::Vector{Float64} = [0.5; sqrt(0.75)] * G_Moire
+        a1::Vector{Float64} = [ sinθ; -cosθ] * a_Moire
+        a2::Vector{Float64} = [   0.;    1.] * a_Moire / ratio12
+        G_Moire::Float64 = 2π / a_Moire / sinθ
+        G1::Vector{Float64} = [  1.;   0.] * G_Moire
+        G2::Vector{Float64} = [cosθ; sinθ] * G_Moire * ratio12
+        Gl::Float64 = G_Moire * l 
         # wavefunction normalization
         γ2::ComplexF64 = _γ2(a1, a2)
         WF_nmlz::Float64 = WF_normalizer(a1, a2, l, γ2)
@@ -99,11 +101,11 @@ end
 # ρ[k1, k2, τ, τ′] = <c†_{k,τn′}c_{k,τn}>
 begin
     # interaction V(q) / (2pi l²) =  W0 * following function
-    function V_int(qq1, qq2; N1, N2, Gl, D_l)
+    function V_int(qq1, qq2; N1, N2, Gl, r12, D_l, cosθ)
         if qq1==0 && qq2==0
             V = D_l
         else
-            ql = sqrt((qq1/N1)^2 + (qq2/N2)^2 + (qq1/N1)*(qq2/N2)) * Gl
+            ql = sqrt((qq1/N1)^2 + (qq2/N2*r12)^2 + 2cosθ*(qq1/N1)*(qq2/N2*r12)) * Gl
             V = 1.0 / ql * tanh(ql*D_l)
         end
         return V
@@ -119,8 +121,8 @@ begin
             elseif abs(g1+g2)>Nshell
                 continue
             end
-            V = V_int(g1*N1, g2*N2; N1=N1, N2=N2,
-                Gl=sys_para.Gl, D_l=sys_para.D/sys_para.l
+            V = V_int(g1*N1, g2*N2; N1=N1, N2=N2, r12 = sys_para.ratio12,
+                Gl=sys_para.Gl, D_l=sys_para.D/sys_para.l, cosθ=sys_para.cosθ
             )
 
             for τp = [1;-1], τk = [1;-1]
@@ -157,9 +159,9 @@ begin
                 qq1 = q1 + g1 * N1
                 qq2 = q2 + g2 * N2
 
-                V = V_int(qq1, qq2; N1=N1, N2=N2,
-                Gl=sys_para.Gl, D_l=sys_para.D/sys_para.l
-            )
+                V = V_int(qq1, qq2; N1=N1, N2=N2, r12 = sys_para.ratio12,
+                    Gl=sys_para.Gl, D_l=sys_para.D/sys_para.l, cosθ=sys_para.cosθ
+                )
 
                 phase_angle = ql_cross(k1/N1, k2/N2, p1/N1, p2/N2)
                 phase_angle += ql_cross((k1+p1)/N1, (k2+p2)/N2, qq1/N1, qq2/N2)

@@ -5,7 +5,7 @@ module LLTDHF
 
 public LLTDHFGroundState
 export TDHF_groundstateanalysis
-export TDHF_V_matrix_spin, TDHF_matrix, TDHF_solve
+export TDHF_V_matrix_spin, TDHF_ZEXV, TDHF_solve
 
 
 using MKL, LinearAlgebra
@@ -42,6 +42,7 @@ end
 
 """
 Input the excitation momentum q=(q1, q2) and the numerical parameters
+q1, q2 can be non-integers in units of 1/N1, 1/N2
 Output the interaction coefficient in form of
 V[s1, s2, s3, s4, p1, p2, k1, k2]
 """
@@ -66,7 +67,9 @@ function TDHF_V_matrix_spin(q1, q2, HFpara::LLHFNumPara; Gshell = 2)
         if qg1==0 && qg2==0
             continue
         end
-        V = V_int(qg1, qg2; N1=N1, N2=N2, Gl=sys.Gl, D_l=sys.D/sys.l)
+        V = V_int(qg1, qg2; N1=N1, N2=N2, r12 = sys.ratio12,
+            Gl=sys.Gl, D_l=sys.D/sys.l, cosθ=sys.cosθ
+        )
 
         for s12 = [1;-1], s34 = [1;-1]
             phase = [cis(ql_cross((s12*p1-s34*k1)/N1, (s12*p2-s34*k2)/N2, g1, g2)
@@ -103,7 +106,9 @@ function TDHF_V_matrix_spin(q1, q2, HFpara::LLHFNumPara; Gshell = 2)
             g2 -= g2_shift
             qg1 = kpq1 + g1 * N1
             qg2 = kpq2 + g2 * N2
-            V = V_int(qg1, qg2; N1=N1, N2=N2, Gl=sys.Gl, D_l=sys.D/sys.l)
+            V = V_int(qg1, qg2; N1=N1, N2=N2, r12=sys.ratio12, 
+                Gl=sys.Gl, D_l=sys.D/sys.l, cosθ=sys.cosθ
+            )
 
             phase_angle1 = (ql_cross(p1/N1, p2/N2, k1/N1, k2/N2) +
                 ql_cross((k1+p1)/N1, (k2+p2)/N2, g1, g2)
@@ -137,7 +142,8 @@ end
 
 
 """
-Matrix ZE+XV whose eigenvalues is the excitation energy
+Matrix ZE+XV is the Hessian of the energy functional
+should be positive semidefinite
 ``
 V^{\textbf{p}-\textbf{q} s_1} {}_{\textbf{p} s_2,} 
 {}^{\textbf{k}+\textbf{q} s_3} {}_{\textbf{k} s_4}
@@ -146,7 +152,7 @@ V^{\textbf{p}-\textbf{q} n_1} {}_{\textbf{p} n_2,}
 {}^{\textbf{k}+\textbf{q} n_3} {}_{\textbf{k} n_4}
 ``
 """
-function TDHF_matrix(q1, q2, GS::LLTDHFGroundState; 
+function TDHF_ZEXV(q1, q2, GS::LLTDHFGroundState; 
     Vspin = TDHF_Vspin(q1, q2, GS.HFpara))
     N1 = GS.HFpara.N1; N2 = GS.HFpara.N2
     band = GS.band; cov_s2n = GS.eigwf; ctr_s2n = conj(cov_s2n)
@@ -195,13 +201,13 @@ function TDHF_matrix(q1, q2, GS::LLTDHFGroundState;
 end
 
 
-function TDHF_solve(M, n = 4)
-    MM = copy(M)
-    MM[:,:,2,:,:,:] .*= -1
-    N = size(MM,1)*size(MM,2)*2
-    MM = reshape(MM, (N,N))
+function TDHF_solve(ZEXV, n = 4)
+    M = copy(ZEXV)
+    M[:,:,2,:,:,:] .*= -1
+    N = size(M,1)*size(M,2)*2
+    M = reshape(M, (N,N))
     vec0 = rand(ComplexF64, N)
-    vals, vecs, info = eigsolve(MM, vec0, 2n, EigSorter(abs,rev=false), ishermitian=false);
+    vals, vecs, info = eigsolve(M, vec0, 2n, EigSorter(abs,rev=false), ishermitian=false);
     return vals[1:2n]#, vecs[1:2n]
     #perm = sortperm(real.(vals))[n+1:2n]
     #return vals[perm], vecs[perm]
