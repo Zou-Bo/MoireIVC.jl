@@ -20,9 +20,12 @@ SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 TensorCast = "02d47bb6-7ce6-556a-be16-bb1710789e2b"
 TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"
 
+[sources]
+PhysicalUnits = {url = "https://github.com/Zou-Bo/PhysicalUnits.jl"}
+
 [compat]
 ArbNumerics = "1.5.4"
-CairoMakie = "0.13.4"
+CairoMakie = "0.13.6"
 ClassicalOrthogonalPolynomials = "0.15.1"
 Combinatorics = "1.0.2"
 ExtendableSparse = "1.7.1"
@@ -43,6 +46,3 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Test"]
-
-[sources]
-PhysicalUnits = {url = "https://github.com/Zou-Bo/PhysicalUnits.jl"}
