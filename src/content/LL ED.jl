@@ -4,7 +4,8 @@ The two regions contains two Dirac Points with large momentum kD1, kD2.
 Small momentum is the momentum relative to Dirac Points (DP)
 Use Landau level quasi-Bloch wavefunctions
 
-Import same system parameters from LLHF.
+Import system parameters from LLHF.
+Only work for C3 solutions where the Dirac points are κ and κ′
 
 Input numerical parameter includes:
 Some k points around the two Dirac points,
@@ -47,6 +48,9 @@ begin
         Nk::Int64
         LL::Int64
         system::LLHFSysPara
+
+        # rigid shift percentage of k_mesh due to flux insertion
+        shift::Tuple{Float64, Float64} = (0.0, 0.0)
     end
     """
     parameters of ED calculation:
@@ -58,7 +62,7 @@ begin
     mean-field Hamiltonian: Hmf[k,s,s',kD] c†_{k,s,kD} c_{k,s',kD}.
     system::LLHFSysPara contains G1, G2, Gl.
     """
-    function LLED_init(k_list, Hmf, syspara, N, LL)
+    function LLED_init(k_list, Hmf, syspara, N, LL, shift = (0.0, 0.0))
         if N%3 !=0
             N = N%3 * 3
             @warn "Input k-mesh is not 3n×3n, changed to $N×$N."
@@ -70,7 +74,7 @@ begin
         if size(Hmf) != (k_num, 2, 2, 2)
             error("Input mean field size incompatible to k_list")
         end
-        return LLEDPara(; k_list = k_list, Hmf = Hmf, Nk = N, system = syspara, LL = LL)
+        return LLEDPara(; k_list = k_list, Hmf = Hmf, Nk = N, system = syspara, LL = LL, shift = shift)
     end
 end
 
@@ -209,9 +213,9 @@ begin
     For <kf | exp{+i[q⋅r + G⋅r]} | ki>, q=kf-ki,
     use -G simply.
     """
-    function Form_phase(ki, kf, G, spin, Nk)
-        ki1 = ki[1]; ki2 = ki[2]
-        kf1 = kf[1]; kf2 = kf[2]
+    function Form_phase(ki, kf, G, spin, Nk, shift)
+        ki1 = ki[1] + shift[1]; ki2 = ki[2] + shift[2]
+        kf1 = kf[1] + shift[1]; kf2 = kf[2] + shift[2]
         phase = 0.5*ql_cross(kf1/Nk, kf2/Nk, ki1/Nk, ki2/Nk)
         phase+= 0.5*ql_cross((ki1+kf1)/Nk, (ki2+kf2)/Nk, G[1], G[2])
         phase *= 3-2spin
@@ -280,6 +284,7 @@ begin
         k_list = para.k_list
         k_num = para.k_num
         NK = para.Nk÷3
+        shift = para.shift
 
         list = Tuple{ComplexF64, Int64, Int64, Int64, Int64}[]
 
@@ -317,11 +322,11 @@ begin
                                 continue
                             end
                             V += VFF(k4index .- k1index .+ (g1, g2).*3NK, para) * 
-                                cis(Form_phase(k1index, k4index, (g1,g2), spin, 3NK)
-                                + Form_phase(k2index, k3index, (-g1,-g2), spin, 3NK))
+                                cis(Form_phase(k1index, k4index, (g1,g2), spin, 3NK, shift)
+                                + Form_phase(k2index, k3index, (-g1,-g2), spin, 3NK, shift))
                             V -= VFF(k3index .- k1index .+ (g1, g2).*3NK, para) * 
-                                cis(Form_phase(k1index, k3index, (g1,g2), spin, 3NK)
-                                + Form_phase(k2index, k4index, (-g1,-g2), spin, 3NK))
+                                cis(Form_phase(k1index, k3index, (g1,g2), spin, 3NK, shift)
+                                + Form_phase(k2index, k4index, (-g1,-g2), spin, 3NK, shift))
                         end
                         
                         normal_order_push!(list, (V,i4,i3,i2,i1))
@@ -350,12 +355,12 @@ begin
                             end
                             if spin1 == spin4
                                 V += VFF(k4index .- k1index .+ (g1, g2).*3NK, para) * 
-                                cis(Form_phase(k1index, k4index, (g1,g2), spin1, 3NK)
-                                + Form_phase(k2index, k3index, (-g1,-g2), spin2, 3NK))
+                                cis(Form_phase(k1index, k4index, (g1,g2), spin1, 3NK, shift)
+                                + Form_phase(k2index, k3index, (-g1,-g2), spin2, 3NK, shift))
                             else
                                 V -= VFF(k3index .- k1index .+ (g1, g2).*3NK, para) * 
-                                cis(Form_phase(k1index, k3index, (g1,g2), spin1, 3NK)
-                                + Form_phase(k2index, k4index, (-g1,-g2), spin2, 3NK))
+                                cis(Form_phase(k1index, k3index, (g1,g2), spin1, 3NK, shift)
+                                + Form_phase(k2index, k4index, (-g1,-g2), spin2, 3NK, shift))
                             end
                         end
 
@@ -392,11 +397,11 @@ begin
                                 continue
                             end
                             V += VFF(k4index .- k1index .+ (g1, g2).*3NK, para) * 
-                                cis(Form_phase(k1index, k4index, (g1,g2), spin, 3NK)
-                                + Form_phase(k2index, k3index, (-g1,-g2), spin, 3NK))
+                                cis(Form_phase(k1index, k4index, (g1,g2), spin, 3NK, shift)
+                                + Form_phase(k2index, k3index, (-g1,-g2), spin, 3NK, shift))
                             V -= VFF(k3index .- k1index .+ (g1, g2).*3NK, para) * 
-                                cis(Form_phase(k1index, k3index, (g1,g2), spin, 3NK)
-                                + Form_phase(k2index, k4index, (-g1,-g2), spin, 3NK))
+                                cis(Form_phase(k1index, k3index, (g1,g2), spin, 3NK, shift)
+                                + Form_phase(k2index, k4index, (-g1,-g2), spin, 3NK, shift))
                         end
 
                         normal_order_push!(list, (V,i4,i3,i2,i1))
@@ -426,12 +431,12 @@ begin
                             end
                             if spin1 == spin4
                                 V += VFF(k4index .- k1index .+ (g1, g2).*3NK, para) * 
-                                cis(Form_phase(k1index, k4index, (g1,g2), spin1, 3NK)
-                                + Form_phase(k2index, k3index, (-g1,-g2), spin2, 3NK))
+                                cis(Form_phase(k1index, k4index, (g1,g2), spin1, 3NK, shift)
+                                + Form_phase(k2index, k3index, (-g1,-g2), spin2, 3NK, shift))
                             else
                                 V -= VFF(k3index .- k1index .+ (g1, g2).*3NK, para) * 
-                                cis(Form_phase(k1index, k3index, (g1,g2), spin1, 3NK)
-                                + Form_phase(k2index, k4index, (-g1,-g2), spin2, 3NK))
+                                cis(Form_phase(k1index, k3index, (g1,g2), spin1, 3NK, shift)
+                                + Form_phase(k2index, k4index, (-g1,-g2), spin2, 3NK, shift))
                             end
                         end
 
