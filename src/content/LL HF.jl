@@ -293,6 +293,37 @@ function hf_interaction(ρ, para::LLHFNumPara)
     end
     return para.system.W0 / para.k_num * H
 end
+function hf_interaction(ρ, para::LLHFNumPara, part::Symbol)
+    H = zeros(ComplexF64, size(para.H0))
+    if part == :HA
+        for τk in 1:2
+            τp = τk
+            @tensor H[:,:, τk, τk][k1, k2] += 
+            ρ[:,:, τp, τp][p1, p2] * para.Hartree[:,:,:,:,τp,τk][p1, p2, k1, k2]
+        end
+    elseif part == :HE
+        for τk in 1:2
+            τp = 3-τk
+            @tensor H[:,:, τk, τk][k1, k2] += 
+            ρ[:,:, τp, τp][p1, p2] * para.Hartree[:,:,:,:,τp,τk][p1, p2, k1, k2]
+        end
+    elseif part == :XA
+        for τn in 1:2
+            τn′ = τn
+            @tensor H[:,:, τn′, τn][k1, k2] -= 
+            ρ[:,:, τn′, τn][p1, p2] * para.Fock[:,:,:,:,τn′,τn][p1, p2, k1, k2]
+        end
+    elseif part == :XE
+        for τn in 1:2
+            τn′ = 3-τn
+            @tensor H[:,:, τn′, τn][k1, k2] -= 
+            ρ[:,:, τn′, τn][p1, p2] * para.Fock[:,:,:,:,τn′,τn][p1, p2, k1, k2]
+        end
+    else
+        error("part can onl be :HA, :HE, :XA, :XE")
+    end
+    return para.system.W0 / para.k_num * H
+end
 "Tr[ρ*O] expectation value: ρ[k1, k2, τ, τ′] * O[k1, k2, τ′, τ]"
 function trace(rho, O)
     #return @tensor rho[k1, k2, τ, τ′] * O[k1, k2, τ′, τ]
