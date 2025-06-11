@@ -10,9 +10,9 @@ CairoMakie.activate!()
 N1 = 18; N2 = 18
 num_para = LLHF_init_with_alpha(1.0; N1 = N1, N2 = N2, LL = 0);
 LLHF_change_lambda!(num_para, 0.5);
-LLHF.H0_C3_T!(num_para, 0.0);
+LLHF.H0_C3_T!(num_para, 0.1);
 ρVP = LLHF.VP_solution(num_para,1);
-LLHF_plot_band_3D(ρVP; para=num_para)
+#LLHF_plot_band_3D(ρVP; para=num_para)
 
 
 symmetry = [LLHF.Rot3(0); LLHF.PT(0,:T)]
@@ -36,7 +36,7 @@ LLHF.trace(ρVP, 0.5LLHF.hf_interaction(ρVP, num_para, :XA)) / num_para.k_num /
 LLHF.trace(ρVP, 0.5LLHF.hf_interaction(ρVP, num_para, :XE)) / num_para.k_num / num_para.system.Area_uc
 
 
-LLHF_plot_band_3D(ρ; para=num_para)
+#LLHF_plot_band_3D(ρ; para=num_para)
 LLHF_plot_band(ρ; para=num_para)
 LLHF_plot_phase(ρ; para=num_para)
 LLHF_plot_Sz(ρ; para=num_para)
