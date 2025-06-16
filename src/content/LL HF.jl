@@ -140,16 +140,12 @@ begin
     function Fock!(Fock, N1, N2, LL, sys_para::LLHFSysPara; Nshell=2)
         Fock .= 0.0
 
-        Threads.@threads for p1 in 0:N1-1    
-        for (p2,k1,k2) in Iterators.product(0:N2-1, 0:N1-1, 0:N2-1)
+        Threads.@threads for Ipk in CartesianIndices(axes(Fock)[1:4])
+            p1, p2, k1, k2 = Tuple(Ipk) .- 1
             q1 = k1 - p1
             q2 = k2 - p2
-            q1 %= N1
-            q2 %= N2
-            q1 < -N1 ÷ 2 && (q1 += N1)
-            q1 >  N1 ÷ 2 && (q1 -= N1)
-            q2 < -N2 ÷ 2 && (q2 += N2)
-            q2 >  N2 ÷ 2 && (q2 -= N2)
+            q1 = mod(k1 - p1 + N1 ÷ 2, N1) - N1 ÷ 2
+            q2 = mod(k2 - p2 + N2 ÷ 2, N2) - N2 ÷ 2
             # N shells of reciprocal lattice vectors G
             for g1 in -Nshell:Nshell, g2 in -Nshell:Nshell
                 if abs(g1+g2)>Nshell
@@ -172,10 +168,9 @@ begin
 
                     VFF = Form_factor(LL,LL, (-qq1*sys_para.G1/N1-qq2*sys_para.G2/N2)..., τn, sys_para.l) * 
                         Form_factor(LL,LL, (qq1*sys_para.G1/N1+qq2*sys_para.G2/N2)..., τn′, sys_para.l) * V
-                    Fock[1+p1,1+p2,1+k1,1+k2, (3-τn′)÷2, (3-τn)÷2] += factor * VFF
+                    Fock[Ipk, (3-τn′)÷2, (3-τn)÷2] += factor * VFF
                 end
             end
-        end
         end
         return Fock
     end
