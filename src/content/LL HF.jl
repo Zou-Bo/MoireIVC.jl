@@ -125,7 +125,7 @@ begin
                 Gl=sys_para.Gl, D_l=sys_para.D/sys_para.l, cosθ=sys_para.cosθ
             )
 
-            for τp = [1;-1], τk = [1;-1]
+            for τp = (1,-1), τk = (1,-1)
                 phase = [cis(ql_cross((τk*k1 - τp*p1)/N1, (τk*k2 - τp*p2)/N2, g1, g2) )
                     for p1 in 0:N1-1, p2 in 0:N2-1, k1 in 0:N1-1, k2 in 0:N2-1
                 ]
@@ -140,12 +140,22 @@ begin
     function Fock!(Fock, N1, N2, LL, sys_para::LLHFSysPara; Nshell=2)
         Fock .= 0.0
 
-        Threads.@threads for Ipk in CartesianIndices(axes(Fock)[1:4])
-            p1, p2, k1, k2 = Tuple(Ipk) .- 1
-            q1 = k1 - p1
-            q2 = k2 - p2
-            q1 = mod(k1 - p1 + N1 ÷ 2, N1) - N1 ÷ 2
-            q2 = mod(k2 - p2 + N2 ÷ 2, N2) - N2 ÷ 2
+
+        function VV(qq1, qq2) 
+            V_int(qq1, qq2; N1=N1, N2=N2, r12 = sys_para.ratio12,
+                Gl=sys_para.Gl, D_l=sys_para.D/sys_para.l, cosθ=sys_para.cosθ
+            )
+        end
+        G1x, G1y = sys_para.G1 / N1
+        G2x, G2y = sys_para.G2 / N2
+        l = sys_para.l
+
+        #Threads.@threads for Ipk in CartesianIndices(axes(Fock)[1:2])
+        #    p1, p2 = Tuple(Ipk) .- 1
+        Threads.@threads for p1 in 0:N1-1
+            for p2 in 0:N2-1, k1 in 0:N1-1, k2 in 0:N2-1
+            q1 = rem(k1 - p1, N1, RoundNearest)
+            q2 = rem(k2 - p2, N2, RoundNearest)
             # N shells of reciprocal lattice vectors G
             for g1 in -Nshell:Nshell, g2 in -Nshell:Nshell
                 if abs(g1+g2)>Nshell
@@ -155,22 +165,22 @@ begin
                 qq1 = q1 + g1 * N1
                 qq2 = q2 + g2 * N2
 
-                V = V_int(qq1, qq2; N1=N1, N2=N2, r12 = sys_para.ratio12,
-                    Gl=sys_para.Gl, D_l=sys_para.D/sys_para.l, cosθ=sys_para.cosθ
-                )
+                V = VV(qq1, qq2)
 
                 phase_angle = ql_cross(k1/N1, k2/N2, p1/N1, p2/N2)
                 phase_angle += ql_cross((k1+p1)/N1, (k2+p2)/N2, qq1/N1, qq2/N2)
 
-                for τn′ = [1;-1], τn = [1;-1]
-
-                    factor = τn == τn′ ? 1.0 : cis(τn * phase_angle)
-
-                    VFF = Form_factor(LL,LL, (-qq1*sys_para.G1/N1-qq2*sys_para.G2/N2)..., τn, sys_para.l) * 
-                        Form_factor(LL,LL, (qq1*sys_para.G1/N1+qq2*sys_para.G2/N2)..., τn′, sys_para.l) * V
-                    Fock[Ipk, (3-τn′)÷2, (3-τn)÷2] += factor * VFF
+                for τn′ = (1,-1), τn = (1,-1)
+                    VFF = Form_factor(LL,LL, -qq1*G1x-qq2*G2x, -qq1*G1y-qq2*G2y, τn , l) * 
+                          Form_factor(LL,LL,  qq1*G1x+qq2*G2x,  qq1*G1y+qq2*G2y, τn′, l) * V
+                    if τn != τn′
+                        VFF *= cis(τn * phase_angle)
+                    end
+                    #Fock[Ipk, (3-τn′)÷2, (3-τn)÷2] += VFF
+                    Fock[1+p1,1+p2,1+k1,1+k2, (3-τn′)÷2, (3-τn)÷2] += VFF
                 end
             end
+        end
         end
         return Fock
     end
@@ -559,7 +569,7 @@ function hf_converge!(ρ;
     error_tolerance = 1E-8, max_iter_times = 200,
     complusive_mixing = false, complusive_mixing_rate = 0.5,
     stepwise_output::Bool = false, final_output::Bool = true,
-    post_process_times = 0, post_procession = [], )
+    post_process_times = max_iter_times, post_procession = [], )
 
 
     if complusive_mixing
