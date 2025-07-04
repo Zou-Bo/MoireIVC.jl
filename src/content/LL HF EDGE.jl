@@ -14,24 +14,61 @@ using MoireIVC.LLHF
 using MoireIVC.Basics: ql_cross
 using MoireIVC.LLHF: LLHFNumPara, LLHFSysPara, Form_factor
 
-
+N1=2
+CartesianIndices((N1,N1,N1,N1))
+for i in CartesianIndices((N1,N1,N1,N1))
+    println(i)
+end
 
 # Hartree[Z, Z′, X, X′, τZ, τX, py, ky]
 function Hartree!(
     Hartree::Array{ComplexF64,8}, 
     N1::Int64, N2::Int64, LL::Int64, system::LLHFSysPara;
-    maxGy::Int64 = 2,
+    maxLxShift::Int64 = 2,
 )
     Hartree .= 0.0
 
-    for Gy in -maxGy:maxGy
+    for Idx in CartesianIndices(Hartree)
+        Z  = Idx[1] -1
+        Z′ = Idx[2] -1
+        X  = Idx[3] -1
+        X′ = Idx[4] -1
+        τZ = 3-2Idx[5]
+        τX = 3-2Idx[6]
+        py = Idx[7] -1
+        ky = Idx[8] -1
+        if ( τZ*(Z′-Z) - τX*(X-X′) ) % N1 == 0
+            p_ZX = ( τZ*(Z′-Z) - τX*(X-X′) ) ÷ N1
+            qy = system.G2[2] * τX * (X-X′)
+
+            for LxShift in -maxLxShift:maxLxShift
+
+                qqy = qy + LxShift * system.G2[2] * τX * N1
+
+                function VFF(qx)
+
+                end
+
+                integral = quadgk(VFF, -∞, ∞)[1]
+
+                Hartree[Idx] += integral * cis()
+            end
+
+        end
+    end
+    return Hartree
+end
+
+
+
+    for Gy in -maxLxShift:maxLxShift
         
 
             V = V_int(Gx*N1, Gy*N2; N1=N1, N2=N2, r12 = system.ratio12,
                 Gl=system.Gl, D_l=system.D/system.l, cosθ=system.cosθ
             )
 
-            for τp = [1;-1], τk = [1;-1]
+            for τp = (1,-1), τk = (1,-1)
                 phase = [cis(ql_cross((τk*k1 - τp*p1)/N1, (τk*k2 - τp*p2)/N2, Gx, Gy) )
                     for p1 in 0:N1-1, p2 in 0:N2-1, k1 in 0:N1-1, k2 in 0:N2-1
                 ]
