@@ -1,6 +1,7 @@
 """
 This module gives the interacting edge calculation with a possible potential V(X)
 and the densities of the two ends may be fixed.
+works only for lattice G1=(G1,0) and G2=(G2*cosθ, G2*sinθ)
 """
 #module LLHFEDGE
     
@@ -14,73 +15,115 @@ using MoireIVC.LLHF
 using MoireIVC.Basics: ql_cross
 using MoireIVC.LLHF: LLHFNumPara, LLHFSysPara, Form_factor
 
-N1=2
-CartesianIndices((N1,N1,N1,N1))
-for i in CartesianIndices((N1,N1,N1,N1))
-    println(i)
+
+# qy are integer multiple of G2y/N2
+# qx are in multiple of G1x/N1 but can be real numbers
+@inline function VFF(qx, qy; N1, N2, LL, Gl, D_l, y_x, τn, τn′)
+
+    V  = Form_factor(LL, LL, -qx/N1, -qy/N2*y_x, τn , Gl)
+    V *= Form_factor(LL, LL,  qx/N1,  qy/N2*y_x, τn′, Gl)
+
+    if qx==0.0 && qy==0
+        V *= D_l
+    else
+        ql = sqrt((qx/N1)^2 + (qy/N2*y_x)^2 ) * Gl
+        V *= tanh(ql*D_l) / ql
+    end
+
+    return V
 end
+
 
 # Hartree[Z, Z′, X, X′, τZ, τX, py, ky]
 function Hartree!(
     Hartree::Array{ComplexF64,8}, 
     N1::Int64, N2::Int64, LL::Int64, system::LLHFSysPara;
-    maxLxShift::Int64 = 2,
+    Gmax=2,
 )
     Hartree .= 0.0
 
+    Gl = system.Gl
+    D_l = system.D / system.l
+    y_x = system.ratio12 * system.sinθ
+
     for Idx in CartesianIndices(Hartree)
-        Z  = Idx[1] -1
-        Z′ = Idx[2] -1
-        X  = Idx[3] -1
-        X′ = Idx[4] -1
+        Z  = Idx[1] - 1
+        Z′ = Idx[2] - 1
+        X  = Idx[3] - 1
+        X′ = Idx[4] - 1
         τZ = 3-2Idx[5]
         τX = 3-2Idx[6]
-        py = Idx[7] -1
-        ky = Idx[8] -1
+        py = Idx[7] - 1
+        ky = Idx[8] - 1
         if ( τZ*(Z′-Z) - τX*(X-X′) ) % N1 == 0
-            p_ZX = ( τZ*(Z′-Z) - τX*(X-X′) ) ÷ N1
-            qy = system.G2[2] * τX * (X-X′)
+            LxShift_ZX = ( τZ*(Z′-Z) - τX*(X-X′) ) ÷ N1
 
-            for LxShift in -maxLxShift:maxLxShift
+            LxShift_X, qy = divrem(τX*(X-X′), N1, RoundNearest)
+            LxShift_X *= τX
+            qy *= N2
 
-                qqy = qy + LxShift * system.G2[2] * τX * N1
+            LxShift_Z = -τZ * (τX * LxShift_X + LxShift_ZX)
 
-                function VFF(qx)
+            function intgrand(qx)
+                v = VFF(qx, qy; N1=N1, N2=N2, LL=LL, Gl=Gl, D_l=D_l, y_x=y_x, τn=τX, τn′=τZ)
+                return v * cispi(2qx*(0.5LxShift_Z-0.5LxShift_X+0.5(Z+Z′-X-X′)/N1)+(τz*py-τx*ky)/N1/N2)
+            end
 
+            
+            integral = sum(integrand, -Gmax*N1:Gmax*N1)
+            integral *= cispi(-(LxShift_X*ky+LxShift_Z*py)*N1/N2)
+            integral *= (-im*τX)^((X-X′-LxShift_X)^2)
+            integral *= (-im*τX)^((Z-Z′-LxShift_Z)^2)
+            Hartree[Idx] += integral
+
+        end
+    end
+    return Hartree
+end
+# Fock[Z, Z′, X, X′, τ, τ′, py, ky]
+function Fock(
+    Fock::Array{ComplexF64,8}, 
+    N1::Int64, N2::Int64, LL::Int64, system::LLHFSysPara
+)
+    Fock .= 0.0
+
+    Gl = system.Gl
+    D_l = system.D / system.l
+    y_x = system.ratio12 * system.sinθ
+
+    for Idx in CartesianIndices(Fock)
+        Z  = Idx[1] - 1
+        Z′ = Idx[2] - 1
+        X  = Idx[3] - 1
+        X′ = Idx[4] - 1
+        τ  = 3-2Idx[5]
+        τ′ = 3-2Idx[6]
+        py = Idx[7] - 1
+        ky = Idx[8] - 1
+        if ( τZ*(Z′-Z) - τX*(X-X′) ) % N1 == 0
+            if (py-ky)*N1 % (2N2) == 0
+                LxShift_ZX = ( τZ*(Z′-Z) - τX*(X-X′) ) ÷ N1
+
+                LxShift_X, qy = divrem(τX*(X-X′), N1, RoundNearest)
+                LxShift_X *= τX
+                qy *= N2
+
+                LxShift_Z = -τZ * (τX * LxShift_X + LxShift_ZX)
+
+                function intgrand(qx)
+                    v = VFF(qx, qy; N1=N1, N2=N2, LL=LL, Gl=Gl, D_l=D_l, y_x=y_x, τn=τX, τn′=τZ)
+                    return v * cispi(2qx*(0.5LxShift_Z-0.5LxShift_X+0.5(Z+Z′-X-X′)/N1)+(τz*py-τx*ky)/N1/N2)
                 end
 
-                integral = quadgk(VFF, -∞, ∞)[1]
+                integral = quadgk(intgrand, -∞, ∞)[1]
 
-                Hartree[Idx] += integral * cis()
-            end
-
-        end
-    end
-    return Hartree
-end
-
-
-
-    for Gy in -maxLxShift:maxLxShift
-        
-
-            V = V_int(Gx*N1, Gy*N2; N1=N1, N2=N2, r12 = system.ratio12,
-                Gl=system.Gl, D_l=system.D/system.l, cosθ=system.cosθ
-            )
-
-            for τp = (1,-1), τk = (1,-1)
-                phase = [cis(ql_cross((τk*k1 - τp*p1)/N1, (τk*k2 - τp*p2)/N2, Gx, Gy) )
-                    for p1 in 0:N1-1, p2 in 0:N2-1, k1 in 0:N1-1, k2 in 0:N2-1
-                ]
-                VFF = Form_factor(LL,LL, (-Gx*system.G1-Gy*system.G2)..., τk, system.l) * 
-                    Form_factor(LL,LL, (Gx*system.G1+Gy*system.G2)..., τp, system.l) * V
-                Hartree[:,:,:,:, (3-τp)÷2, (3-τk)÷2] .+= VFF .* phase 
+                Fock[Idx] += integral * cispi(-(LxShift_X*ky+LxShift_Z*py)*N1/N2)
             end
         end
     end
-
-    return Hartree
+    return Fock
 end
+
 
 
 
