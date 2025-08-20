@@ -25,11 +25,11 @@ PhysicalUnits = {rev = "master", url = "https://github.com/Zou-Bo/PhysicalUnits.
 
 [compat]
 ArbNumerics = "1.5.4"
-CairoMakie = "0.14.0"
+CairoMakie = "0.15.0"
 ClassicalOrthogonalPolynomials = "0.11.0"
 Combinatorics = "1.0.2"
 ExtendableSparse = "1.7.1"
-KrylovKit = "0.9.5"
+KrylovKit = "0.10.0"
 LinearAlgebra = "1.11.0"
 MKL = "0.9.0"
 PhysicalUnits = "1.0.0"

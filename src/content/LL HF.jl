@@ -150,8 +150,7 @@ begin
         G2x, G2y = sys_para.G2 / N2
         l = sys_para.l
 
-        #Threads.@threads for Ipk in CartesianIndices(axes(Fock)[1:2])
-        #    p1, p2 = Tuple(Ipk) .- 1
+
         Threads.@threads for p1 in 0:N1-1
             for p2 in 0:N2-1, k1 in 0:N1-1, k2 in 0:N2-1
             q1 = rem(k1 - p1, N1, RoundNearest)

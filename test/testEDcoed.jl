@@ -14,6 +14,10 @@ k_index = [
     -1;  0;;
      0; -1;;
     +1; -1;;
+
+    +1; +1;;
+    +2;  0;;
+    +2; -1;;
 ]
 E_1 = 5.37meV
 # Hmf[k,s,s',kD] c†_{k,s,kD} c_{k,s',kD};
@@ -34,15 +38,20 @@ function DiracCone(E_1=E_1, k_index=k_index)
 
         return Hmf
     else
-        error("k_num should be 0 or 7")
+        #error("k_num should be 0 or 7")
+        return Hmf
     end
 end
-Hmf=DiracCone();
+Hmf=DiracCone()
 
 
-para1 = LLED_init(k_index[:,[1,2,5]], Hmf[[1,2,5],:,:,:], system, 30, 1);
+para1 = LLED_init(k_index[:,:], Hmf[:,:,:,:], system, 30, 1);
+para1.k_num
+LLED.mbslist_oneDiracCone(para1, para1.k_num)
+
+
 blocks1, block_k1_1, block_k2_1, bn0_1 = 
-LLED_block_bysmallmomentum(LLED_mbslist_twoDiracCone(para1, 5, 5);
+LLED_block_bysmallmomentum(LLED_mbslist_twoDiracCone(para1, 10, 10);
     k1range=(-2,2), k2range=(-2,2)
 );
 blocks1[bn0_1];
