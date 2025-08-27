@@ -53,7 +53,6 @@ function LLHF_plot_band_3D(rho; para::LLHFNumPara, unit=:W0)
             for k1 in 0:N1-1, k2 in 0:N2-1
         ],
     )
-    #display(current_figure())
     display(fig)
     CairoMakie.activate!()
 end
@@ -336,7 +335,7 @@ function LLHF_plot_phase!(ax, ρ; para::LLHFNumPara, others...)
     k2range = floor(Int64,-0.9N2):floor(Int64,0.9N2)
 
 
-    al = [ angle(ρ[1+k1-floor(Int64,k1//N1)*N1, 1+k2-floor(Int64,k2//N2)*N2,2,1])
+    al = [ angle(ρ[2,1,1+k1-floor(Int64,k1//N1)*N1, 1+k2-floor(Int64,k2//N2)*N2])
         for k1 in k1range, k2 in k2range
     ]
     for I in CartesianIndices(al)

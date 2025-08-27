@@ -7,6 +7,7 @@ phase_color = range(Makie.Colors.HSV(0,1,1), stop=Makie.Colors.HSV(360,1,1), len
 
 
 include("content/basicthings.jl")
+include("methods/HartreeFock.jl")
 
 
 include("content/LL HF.jl")

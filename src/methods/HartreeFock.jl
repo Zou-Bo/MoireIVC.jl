@@ -1,146 +1,238 @@
 """
 General Hartree-Fock algorithm that preserves momentum and mix multiple bands
-using iteration
+using self-consistent iteration
 """
 module HartreeFock
 
-@kwdef mutable struct HFPara
-
-end
+    using MKL, LinearAlgebra
 
 
-# only T=0
-function hf_onestep!(new_rho, ρ; 
-    H0, Hint, step_procession=[],
-    ) 
-    # H[k1, k2, τn′, τn]
-    # ρ[k1, k2, τ, τ′]
-    H = Hint + H0
+    # one step update functions
+    begin
 
-    bands = zeros(Float64, N1, N2, 2)
-    for k1 in axes(H,1), k2 in axes(H,2)
-        vals, vecs = eigen(Hermitian(H[k1,k2,:,:]) )
-        new_rho[k1,k2,:,:] .= vecs[:,1] * vecs[:,1]'
-    end
+        # T=0, integer band filling
+        function hf_onestep_T0_int!(new_rho, ρ, H0;
+            Hint, step_processions=[], filling::Int64,
+            parameter_dim = size(H0)[begin+2:end],
+            band_num = size(H0)[begin],
+            )
 
-    for f in step_procession
-        f(new_rho)
-    end
+            # H[τn′, τn, prmts]
+            # ρ[τ, τ′, prmts]
+            H = Hint + H0
 
-    return
-end
-function band(ρ; para::LLHFNumPara, Hint = hf_interaction(ρ,para), )
-    H = Hint + para.H0
-    N1 = para.N1; N2 = para.N2
-    band = zeros(Float64, N1, N2, 2)
-    for k1 in 0:N1-1, k2 in 0:N2-1
-        vals, vecs = eigen(Hermitian(H[1+k1,1+k2,:,:]) )
-        band[1+k1, 1+k2, :] .= vals
-    end
-    return band
-end
-function hf_converge!(ρ;
-    para::LLHFNumPara, EPA, HINT, OneStep,
-
-    procession_stpes = 0, procession = [], 
-    error_tolerance = 1E-8, iterations = 1:200,
-    mixing = false, mixing_rate = 0.5,
-    stepwise_output::Bool = false, final_output::Bool = true,
-    )
-
-
-    if complusive_mixing
-        println("Iteration uses complusive mixing rate $complusive_mixing_rate.")
-    end
-    
-    hint = hf_interaction(ρ, para)
-
-    new_rho = similar(ρ)
-    new_hint = similar(hint)
-
-    for i in 1:max_iter_times
-        if i == post_process_times+1
-            empty!(post_procession)
-        end
-        hf_onestep!(new_rho, ρ; Hint = hint, 
-            post_procession = post_procession, para = para
-        )
-        
-        new_hint .= hf_interaction(new_rho, para)
-
-        error = maximum(abs.(new_rho-ρ))
-
-        E0 = EPA(ρ, Hint = hint, para=para, imag_print=false)
-        stepwise_output && println("$i \t DM error:$error \t E/S:$E0")
-        E1 = EPA(new_rho, Hint = new_hint, para=para, imag_print=false)
-        Eh = EPA((ρ+new_rho)/2., para=para, imag_print=false) # h stands for halfway
-        k = E0+E1-2Eh
-
-        if complusive_mixing
-            if complusive_mixing_rate == 0.5
-                stepwise_output && println("update rate = 0.5: unstable solution with higher energy")
-                ρ .= (ρ+new_rho)/2.
-                hint = hf_interaction(ρ, para)
-            else
-                x = complusive_mixing_rate
-                stepwise_output && println("update rate = $(round(x; digits=2))")
-                ρ .+= x*(new_rho - ρ)
-                hint = hf_interaction(ρ, para)
-            end
-        else
-            if k <= 0. 
-                if E0 >= E1
-                stepwise_output && println("update rate = 1.0: unstable solution with lower energy")
-                ρ .= new_rho
-                hint .= new_hint
-                else
-                    stepwise_output && println("update rate = 0.5: unstable solution with higher energy")
-                    ρ .= (ρ+new_rho)/2.
-                    hint = hf_interaction(ρ, para)
+            new_rho .= 0.0
+            bands = zeros(Float64, band_num, parameter_dim...)
+            for paraIdx in CartesianIndices(parameter_dim)
+                bands[:, paraIdx] , vecs = eigen(Hermitian(view(H, :, :, paraIdx)) )
+                for i_band in 1:filling
+                    new_rho[:, :, paraIdx] .+= vecs[:,i_band] * vecs[:,i_band]'
                 end
-            elseif k <= 2(E0-E1)
-                stepwise_output && println("update rate = 1.0: energy minimum is ahead but we constrained to 1.0")
-                ρ .= new_rho
-                hint .= new_hint
-            else
-                x0 = 0.5 + (E0-E1)/k
-                x = max(0.1, x0)
-                stepwise_output && println("update rate = $(round(x; digits=2)): energy minimum at $(round(x0; digits=2))")
-                ρ .+= x*(new_rho - ρ)
-                hint = hf_interaction(ρ, para)
             end
+
+            for f! in step_processions
+                f!(new_rho)
+            end
+
+            return bands
         end
 
 
-        if error <= error_tolerance
-            final_output && println("converged in $i iterations, density error = $error")
-            break
+    end
+
+
+    # solving functions
+    begin
+
+
+        """
+        Hartree-Fock self-consistent iteration with dynamic mixing.
+        The mixing rate is determined based on energy.
+        input:
+        EPA: Function to calculate energy per area 
+        HFInteraction: Function to calculate Hartree-Fock interaction
+        HFOneStep: Function to perform one iteration step
+        error_tolerance: Convergence criteria of density matrix elements
+        iteration_steps: Maximum number of iteration steps
+        procession_steps: maximum number of iteration steps with processions
+        step_processions: List of functions for processions
+        stepwise_output: Flag to enable stepwise output
+        process_output: Flag to enable outputs of starting and ending self-consistent process
+        """
+        function hf_SC_mixing!(ρ, H0; filling::Int64,
+            mixing_rate::Union{Symbol, Float64}=:dynamic,
+            EPA, HFInteraction, HFOneStep! = hf_onestep_T0_int!,
+            error_tolerance = 1E-8, iteration_steps = 200,
+            procession_steps = iteration_steps, step_processions = [],
+            stepwise_output::Bool = false, process_output::Bool = true,
+            )
+
+            if mixing_rate == :dynamic
+                process_output && println("Iteration uses dynamic mixing rate.")
+            elseif mixing_rate isa Float64 && mixing_rate > 0
+                process_output && println("Iteration uses fixed mixing rate $mixing_rate")
+            else
+                error("Invalid mixing rate: $mixing_rate. Must be :dynamic or a positive Float64.")
+            end
+            
+
+            hint = HFInteraction(ρ)
+            new_rho = similar(ρ)
+            new_hint = similar(hint)
+
+            for i in 1:iteration_steps
+
+                if i == procession_steps + 1
+                    empty!(step_processions)
+                end
+
+
+                HFOneStep!(new_rho, ρ, H0;
+                    Hint = hint, step_processions = step_processions, filling = filling
+                )
+                new_hint .= HFInteraction(new_rho)
+                error = maximum(abs.(new_rho-ρ))
+
+                if mixing_rate == :dynamic
+                    E0 = EPA(ρ, hint)
+                    stepwise_output && println("$i \t DM error:$error \t E/S:$E0")
+                    E1 = EPA(new_rho, new_hint)
+                    Eh = EPA((ρ+new_rho)/2.) # h stands for halfway
+                    k = E0+E1-2Eh
+                    if k <= 0. 
+                        if E0 >= E1
+                        stepwise_output && println("update rate = 1.0: unstable solution with lower energy")
+                        ρ .= new_rho
+                        hint .= new_hint
+                        else
+                            stepwise_output && println("update rate = 0.5: unstable solution with higher energy")
+                            ρ .= (ρ+new_rho)/2.
+                            hint = HFInteraction(ρ)
+                        end
+                    elseif k <= 2(E0-E1)
+                        stepwise_output && println("update rate = 1.0: energy minimum is ahead but we constrained to 1.0")
+                        ρ .= new_rho
+                        hint .= new_hint
+                    else
+                        x0 = 0.5 + (E0-E1)/k
+                        x = max(0.1, x0)
+                        stepwise_output && println("update rate = $(round(x; digits=2)): energy minimum at $(round(x0; digits=2))")
+                        ρ .+= x*(new_rho - ρ)
+                        hint = HFInteraction(ρ)
+                    end
+                else
+                    E0 = EPA(ρ, hint)
+                    stepwise_output && println("$i \t DM error:$error \t E/S:$E0")
+                    stepwise_output && println("update rate = $(round(mixing_rate; digits=4))")
+                    ρ .+= mixing_rate*(new_rho - ρ)
+                    hint = HFInteraction(ρ)
+                end
+
+                if error <= error_tolerance
+                    process_output && println("converged in $i iterations, density error = $error")
+                    break
+                end
+                if i == iteration_steps
+                    process_output && println("not converged after $iteration_steps iterations, density error = $error.")
+                end
+
+                
+            end
+
+            return
         end
-        if i == max_iter_times
-            final_output && println("not converged after $max_iter_times iterations, density error = $error.")
+
+
+
+        """
+        Hartree-Fock self-consistent iteration with fixed mixing.
+        input:
+        EPA: Function to calculate energy per area 
+        HFInteraction: Function to calculate Hartree-Fock interaction
+        HFOneStep: Function to perform one iteration step
+        error_tolerance: Convergence criteria of density matrix elements
+        iteration_steps: Maximum number of iteration steps
+        procession_steps: maximum number of iteration steps with processions
+        step_processions: List of functions for processions
+        stepwise_output: Flag to enable stepwise output
+        process_output: Flag to enable outputs of starting and ending self-consistent process
+        """
+        function hf_SC_fixed_mixing!(ρ, H0; filling, mixing_rate=1.0,
+            EPA, HFInteraction, HFOneStep! = hf_onestep_T0_int!,
+            error_tolerance = 1E-8, iteration_steps = 200,
+            procession_steps = iteration_steps, step_processions = [],
+            stepwise_output::Bool = false, process_output::Bool = true,
+            )
+
+            if process_output
+                println("Iteration uses fixed mixing rate $mixing_rate.")
+            end
+
+            hint = HFInteraction(ρ)
+            new_rho = similar(ρ)
+            new_hint = similar(hint)
+
+            for i in 1:iteration_steps
+
+                if i == procession_steps + 1
+                    empty!(step_processions)
+                end
+
+
+                HFOneStep!(new_rho, ρ, H0;
+                    Hint = hint, step_processions = step_processions, filling = filling
+                )
+                new_hint .= HFInteraction(new_rho)
+                error = maximum(abs.(new_rho-ρ))
+
+
+                E0 = EPA(ρ, hint)
+                stepwise_output && println("$i \t DM error:$error \t E/S:$E0")
+                stepwise_output && println("update rate = $(round(mixing_rate; digits=4))")
+                ρ .+= mixing_rate*(new_rho - ρ)
+                hint = HFInteraction(ρ)
+
+                
+
+                if error <= error_tolerance
+                    process_output && println("converged in $i iterations, density error = $error")
+                    break
+                end
+                if i == iteration_steps
+                    process_output && println("not converged after $iteration_steps iterations, density error = $error.")
+                end
+
+                
+            end
+
+            return
         end
+
+
+
+
+
+
+
     end
 
-    return ρ
-end
-function HF_solve_iteration(para, ρ;
-    initial_procession=[], final_procession=[],
-    iter...
-    )
 
-    for f in initial_procession
-        f(ρ) 
+    function hf_solve_method(ρ, H0;
+        initial_procession=[], final_procession=[],
+        iter_method! = :hf_SC_mixing!, iter_kwargs...
+        )
+
+        for fi! in initial_procession
+            fi!(ρ) 
+        end
+
+        eval(iter_method!)(ρ, H0; iter_kwargs...)
+
+        for ff! in final_procession
+            ff!(ρ) 
+        end
+
+        return ρ
     end
-    
-    ρ = hf_converge!(ρ; para = para, iter...)
-
-    for f in final_procession
-        f(ρ) 
-    end
-
-    return ρ
-end
-
-
 
 end
