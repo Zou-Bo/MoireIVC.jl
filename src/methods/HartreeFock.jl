@@ -11,7 +11,7 @@ module HartreeFock
     begin
 
         # T=0, integer band filling
-        function hf_onestep_T0_int!(new_rho, ρ, H0;
+        function HF_onestep_T0_int!(new_rho, ρ, H0;
             Hint, step_processions=[], filling::Int64,
             parameter_dim = size(H0)[begin+2:end],
             band_num = size(H0)[begin],
@@ -59,9 +59,9 @@ module HartreeFock
         stepwise_output: Flag to enable stepwise output
         process_output: Flag to enable outputs of starting and ending self-consistent process
         """
-        function hf_SC_mixing!(ρ, H0; filling::Int64,
+        function HF_SC_mixing!(ρ, H0; filling::Int64,
             mixing_rate::Union{Symbol, Float64}=:dynamic,
-            EPA, HFInteraction, HFOneStep! = hf_onestep_T0_int!,
+            EPA, HFInteraction, HFOneStep! = HF_onestep_T0_int!,
             error_tolerance = 1E-8, iteration_steps = 200,
             procession_steps = iteration_steps, step_processions = [],
             stepwise_output::Bool = false, process_output::Bool = true,
@@ -157,8 +157,8 @@ module HartreeFock
         stepwise_output: Flag to enable stepwise output
         process_output: Flag to enable outputs of starting and ending self-consistent process
         """
-        function hf_SC_fixed_mixing!(ρ, H0; filling, mixing_rate=1.0,
-            EPA, HFInteraction, HFOneStep! = hf_onestep_T0_int!,
+        function HF_SC_fixed_mixing!(ρ, H0; filling, mixing_rate=1.0,
+            EPA, HFInteraction, HFOneStep! = HF_onestep_T0_int!,
             error_tolerance = 1E-8, iteration_steps = 200,
             procession_steps = iteration_steps, step_processions = [],
             stepwise_output::Bool = false, process_output::Bool = true,
@@ -217,9 +217,9 @@ module HartreeFock
     end
 
 
-    function hf_solve_method(ρ, H0;
+    function HF_solve_method(ρ, H0;
         initial_procession=[], final_procession=[],
-        iter_method! = :hf_SC_mixing!, iter_kwargs...
+        iter_method! = :HF_SC_mixing!, iter_kwargs...
         )
 
         for fi! in initial_procession

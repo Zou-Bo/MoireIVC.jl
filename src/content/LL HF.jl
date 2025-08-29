@@ -18,7 +18,7 @@ using MKL, LinearAlgebra
 using TensorOperations, TensorCast
 using PhysicalUnits
 using MoireIVC.Basics: LandauLevel_Form_factor, ql_cross, wσ, _γ2
-using MoireIVC.HartreeFock: hf_solve_method, hf_onestep_T0_int!
+using MoireIVC.HartreeFock: HF_solve_method, HF_onestep_T0_int!
 
 # define the system
 begin
@@ -678,7 +678,7 @@ function add_phi!(rho, phi = angle(rho[1,2,1,1]))
 end
 function LLHF_solve(para, ρ = copy(para.DMseed);
     coherence = 0.0, final_procession = [add_phi!],
-    method = :hf_SC_mixing!, mixing_rate = :dynamic, 
+    method = :HF_SC_mixing!, mixing_rate = :dynamic, 
     iter_kwargs...
     )
 
@@ -693,7 +693,7 @@ function LLHF_solve(para, ρ = copy(para.DMseed);
         hf_interaction(ρ, para)
     end
     
-    ρ = hf_solve_method(ρ, para.H0; 
+    ρ = HF_solve_method(ρ, para.H0; 
         initial_procession=[], 
         final_procession=final_procession,
         iter_method! = method, filling = 1,
@@ -738,7 +738,7 @@ function berry_curvature(rho, para::LLHFNumPara)
     θ = zeros(Float64, N1+1, N2+1)
     ϕ = zeros(Float64, N1+1, N2+1)
     intact_rho = similar(rho)
-    hf_onestep_T0_int!(intact_rho, rho, para.H0; 
+    HF_onestep_T0_int!(intact_rho, rho, para.H0; 
         Hint = hf_interaction(rho, para), filling = 1
     )
     local theta, phi = polar_azimuthal_angles(intact_rho, para)
