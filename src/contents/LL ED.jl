@@ -67,29 +67,34 @@ end
 # This implements the full Coulomb interaction with proper magnetic translation phases
 # The interaction is computed in momentum space with Landau level projection
 # Momentum inputs are Tuple(Float64, Float64) representing (k1, k2) in ratio of Gk
-function V_int(kf1, kf2, ki1, ki2, cf1::Int64, cf2::Int64, ci1::Int64, ci2::Int64;
-    LL::Int64 = 0, system::LLHFSysPara, Nshell = 2)::ComplexF64
+function V_int(kf1, kf2, ki2, ki1, cf1::Int64, cf2::Int64, ci2::Int64, ci1::Int64;
+    LL::Int64 = 0, system::LLHFSysPara, Nshell = 2, N)::ComplexF64
 
-    # valley and large momentum conservation: interaction must conserve component indices
-    if ci1 != cf1 || ci2 != cf2
+    # find the large momentum (1, 2) to be added
+    valley_i1, largemomentum_i1 = fldmod1(ci1, 2)
+    valley_i2, largemomentum_i2 = fldmod1(ci2, 2)
+    valley_f1, largemomentum_f1 = fldmod1(cf1, 2)
+    valley_f2, largemomentum_f2 = fldmod1(cf2, 2)
+    valley1 = 3 - 2valley_i1
+    valley2 = 3 - 2valley_i2
+
+    # valley conservation, total large momentum conservation
+    if valley_i1 != valley_f1 || valley_i2 != valley_f2
+        return 0.0 + 0.0im
+    end
+    if largemomentum_i1 + largemomentum_i2 != largemomentum_f1 + largemomentum_f2
         return 0.0 + 0.0im
     end
 
-    # find the large momentum (1, 2) to be added
-    largemomentum_i1 = fld1(ci1, 2)
-    largemomentum_i2 = fld1(ci2, 2)
-    largemomentum_f1 = fld1(cf1, 2)
-    largemomentum_f2 = fld1(cf2, 2)
-
-    ki1 = ki1 .+ (largemomentum_i1 / 3, largemomentum_i1 / 3)
-    ki2 = ki2 .+ (largemomentum_i2 / 3, largemomentum_i2 / 3)
-    kf1 = kf1 .+ (largemomentum_f1 / 3, largemomentum_f1 / 3)
-    kf2 = kf2 .+ (largemomentum_f2 / 3, largemomentum_f2 / 3)
+    ki1 = ki1 ./ N .+ (largemomentum_i1 / 3, largemomentum_i1 / 3)
+    ki2 = ki2 ./ N .+ (largemomentum_i2 / 3, largemomentum_i2 / 3)
+    kf1 = kf1 ./ N .+ (largemomentum_f1 / 3, largemomentum_f1 / 3)
+    kf2 = kf2 ./ N .+ (largemomentum_f2 / 3, largemomentum_f2 / 3)
 
     # Calculate momentum transfer (modulo reciprocal lattice)
-    q = rem.(ki1 .- kf1, 1, RoundNearest)
-    G_shift1 = round.(Int64, ki1 .- kf1 .- q, RoundNearest)
-    G_shift2 = round.(Int64, kf2 .- ki2 .- q, RoundNearest)
+    q0 = rem.(ki1 .- kf1, 1, RoundNearest)
+    G_shift1 = round.(Int64, ki1 .- kf1 .- q0, RoundNearest)
+    G_shift2 = round.(Int64, kf2 .- ki2 .- q0, RoundNearest)
 
     V_total = ComplexF64(0.0)
 
@@ -98,25 +103,32 @@ function V_int(kf1, kf2, ki1, ki2, cf1::Int64, cf2::Int64, ci1::Int64, ci2::Int6
         if system.cosθ == 0.5 && abs(g1+g2) > Nshell
             continue
         end
+        if system.cosθ == -0.5 && abs(g1-g2) > Nshell
+            continue
+        end
 
         # Construct the full momentum transfer including reciprocal lattice
-        qq1 = q[1] + g1
-        qq2 = q[2] + g2
+        qq1 = q0[1] + g1
+        qq2 = q0[2] + g2
+
+        if qq1 == 0.0 && qq2 == 0.0
+            continue
+        end
 
         # Calculate phase factors from magnetic translation algebra
         # These phases ensure proper commutation relations and gauge invariance
-        phase_angle = 0.5ql_cross(ki1[1], ki1[2], kf1[1], kf1[2])
-        phase_angle += 0.5ql_cross(ki1[1]+kf1[1], ki1[2]+kf1[2], qq1, qq2)
-        phase_angle += 0.5ql_cross(ki2[1], ki2[2], kf2[1], kf2[2])
-        phase_angle += 0.5ql_cross(ki2[1]+kf2[1], ki2[2]+kf2[2], -qq1, -qq2)
-        phase = cis(phase_angle)
+        angle1 =  ql_cross(ki1[1], ki1[2], kf1[1], kf1[2])
+        angle1 += ql_cross(ki1[1]+kf1[1], ki1[2]+kf1[2], qq1, qq2)
+        angle2 =  ql_cross(ki2[1], ki2[2], kf2[1], kf2[2])
+        angle2 += ql_cross(ki2[1]+kf2[1], ki2[2]+kf2[2], -qq1, -qq2)
+        phase = cis(0.5valley1 * angle1 + 0.5valley2 * angle2)
         # Sign factors from reciprocal lattice vectors
-        sign = ita(g1+G_shift1[1], g2+G_shift1[2]) * ita(g1+G_shift2[1], g2+G_shift2[2])
+        sign = ita(g1-G_shift1[1], g2-G_shift1[2]) * ita(g1-G_shift2[1], g2-G_shift2[2])
 
         V_total += sign * phase * VFF(qq1, qq2, system, LL)
     end
 
-    return V_total
+    return V_total / N^2
 end
 
 """
@@ -140,7 +152,7 @@ function LLED_init(k_list, H_meanfield, system::LLHFSysPara,
 
     v(kf1, kf2, ki1, ki2, cf1, cf2, ci1, ci2) =
         V_int(kf1, kf2, ki1, ki2, cf1, cf2, ci1, ci2;
-        LL= LL, system = system, Nshell = Nshell
+        LL= LL, system = system, Nshell = Nshell, N = N
     )
 
     return EDPara(
