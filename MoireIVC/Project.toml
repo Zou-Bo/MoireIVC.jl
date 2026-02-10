@@ -1,0 +1,30 @@
+name = "MoireIVC"
+uuid = "90551720-b59b-4cf5-9c28-9970b3de4863"
+version = "1.0.0-DEV"
+authors = ["Alice loves Bob"]
+
+[deps]
+ArbNumerics = "7e558dbc-694d-5a72-987c-6f4ebed21442"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+ClassicalOrthogonalPolynomials = "b30e2e7b-c4ee-47da-9d5f-2c5c27239acd"
+GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+MKL = "33e6dc65-8f57-5167-99aa-e5a354878fb2"
+MomentumED = "2c2e6bdd-50a7-494a-93d8-6f138df00727"
+PhysicalUnits = "260a1713-e24c-4a46-a881-35260f93c772"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+QuadGK = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
+SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
+TensorCast = "02d47bb6-7ce6-556a-be16-bb1710789e2b"
+TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"
+
+[compat]
+GLMakie = "0.13.8"
+KrylovKit = "0.10.2"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
