@@ -262,7 +262,7 @@ begin
     "τ = 1 or 2"
     function VP_solution(num_para::LLHFNumPara, τ)
         DM = zeros(ComplexF64, size(num_para.DMseed))
-        DM[:,:,τ,τ] .= 1.0
+        DM[τ,τ,:,:] .= 1.0
         return DM
     end
     "sinoal H0 with C3 symmetry that opens a gap in unit of W0"
